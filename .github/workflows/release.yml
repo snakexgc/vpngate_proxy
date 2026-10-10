@@ -39,6 +39,9 @@ jobs:
           & './tests/VPNGate.SelfTest/bin/Release/net10.0-windows/VPNGate.SelfTest.exe' --ip-cache --output 'artifacts/ip-cache-tests.json'
           if ($LASTEXITCODE -ne 0) { throw 'IP cache checks failed.' }
 
+      - name: Verify GUI responsiveness under TUN log traffic
+        run: ./scripts/test-ui-logs.ps1
+
       - name: Publish ZIP to GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}

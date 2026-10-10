@@ -25,7 +25,8 @@ public sealed class TunSession : IAsyncDisposable
     public async Task StartAsync(AppSettings settings, CancellationToken cancellationToken)
     {
         if (_disposing || _cycleActive) throw new InvalidOperationException("此 TUN 会话已经启动或已关闭。");
-        settings.Validate(); EngineRuntime.Verify(EngineRuntime.CorePath);
+        settings.Validate();
+        await Task.Run(() => EngineRuntime.Verify(EngineRuntime.CorePath), cancellationToken);
         _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
         using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -45,7 +46,8 @@ public sealed class TunSession : IAsyncDisposable
         await connection;
         _reader = new StreamReader(_pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
         _writer = new StreamWriter(_pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
-        _logs = ReadLogsAsync();
+        // Never let a continuously readable pipe keep the WPF dispatcher busy.
+        _logs = Task.Run(ReadLogsAsync);
         }
         _cycleActive = true;
         var target = settings.Copy(); target.UpstreamProxy = settings.Validate().SafeAddress;

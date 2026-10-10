@@ -41,6 +41,7 @@ TUN 模式另提供本机 TCP / UDP DNS 入口，经 OpenVPN 内的加密 DNS �
 - 运行目录和配置仅授予当前用户、管理员及 SYSTEM 访问权限。
 - 临时内核配置在断开后删除。节点配置仅解析内嵌证书与必要传输参数，不运行其脚本、插件或外部文件。
 - GUI 支持导出当前筛选结果为 CSV，节点失败原因可在行提示和日志查看。
+- 内核日志在后台读取和批量写盘，界面每 250 毫秒合并刷新最近 300 行。高流量时限制日志缓冲，避免未连接节点时的连接失败日志堵塞 TUN 开关和窗口消息；写盘缓冲溢出会记录省略行数。
 - 绑定 `0.0.0.0` 会将无认证本地代理开放给其他设备；默认仅监听回环地址。
 
 ## 从源码构建
@@ -63,9 +64,13 @@ dotnet build vpngate_proxy.sln -c Release
 .\tests\VPNGate.SelfTest\bin\Release\net10.0-windows\VPNGate.SelfTest.exe --live --count 4 --output artifacts\live-tests.json
 .\tests\VPNGate.SelfTest\bin\Release\net10.0-windows\VPNGate.SelfTest.exe --live --all --output artifacts\all-nodes.json
 .\src\VPNGate.Desktop\bin\Release\net10.0-windows\vpngate_proxy.exe --ui-smoke artifacts\ui
+.\scripts\test-ui-logs.ps1
+.\src\VPNGate.Desktop\bin\Release\net10.0-windows\vpngate_proxy.exe --ui-smoke artifacts\tun-startup --tun-only-ui
 ```
 
 TUN 实测运行同一个 `VPNGate.SelfTest.exe --tun --output artifacts\tun-tests.json` 即可；普通用户运行时会请求后台进程的管理员授权。检查覆盖未连接节点时开关 TUN、已连接时切换且保持同一 OpenVPN 进程、断开节点保持 TUN、系统 DNS 及出口 IP、网卡和 DNS 清理、v2rayN / Xray 与 10808 服务。GUI 验证可运行 `vpngate_proxy.exe --ui-smoke artifacts\tun-ui --tun-ui`，同样无需提升整个 GUI。
+
+`test-ui-logs.ps1` 是无需管理员和网络的 GUI 日志压力回归检查，已加入自动发版流程；`--tun-only-ui` 则在没有 OpenVPN 会话的情况下先点击 TUN 按钮，连续开关三次，验证窗口响应、后台复用以及网卡和临时 DNS 规则恢复。
 
 ## 实现
 

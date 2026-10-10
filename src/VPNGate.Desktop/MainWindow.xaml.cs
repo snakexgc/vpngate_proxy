@@ -29,8 +29,9 @@ public partial class MainWindow : Window
     private readonly string[] _arguments;
     private readonly ListCollectionView _view;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
-    private readonly object _logLock = new();
-    private readonly Queue<string> _logLines = new();
+    private readonly DispatcherTimer _logTimer = new(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(250) };
+    private readonly BufferedSessionLog _log;
+    private long _displayedLogVersion;
     private readonly string _logPath;
     private EngineSession? _session;
     private TunSession? _tunSession;
@@ -58,6 +59,7 @@ public partial class MainWindow : Window
         FillSettings(_settings);
         Directory.CreateDirectory(AppDataPaths.Logs);
         _logPath = Path.Combine(AppDataPaths.Logs, $"session-{DateTime.Now:yyyyMMdd-HHmmss}-{Environment.ProcessId}.log");
+        _log = new BufferedSessionLog(_logPath);
         foreach (var old in Directory.GetFiles(AppDataPaths.Logs, "session-*.log").OrderByDescending(File.GetLastWriteTimeUtc).Skip(20))
             try { File.Delete(old); } catch (IOException) { }
         PrivilegeText.Text = EngineRuntime.IsAdministrator ? "管理员权限 · TUN 可直接启动" : "普通用户权限 · TUN 启动时请求授权";
@@ -67,6 +69,8 @@ public partial class MainWindow : Window
             if (_testing) { _view.Refresh(); UpdateCount(); }
         };
         _timer.Start();
+        _logTimer.Tick += (_, _) => RefreshLogDisplay();
+        _logTimer.Start();
     }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -93,6 +97,13 @@ public partial class MainWindow : Window
             var index = Array.IndexOf(_arguments, "--node-type-preview");
             if (index + 1 < _arguments.Length) SaveScreenshot(_arguments[index + 1]);
             Close(); return;
+        }
+        if (_arguments.Contains("--log-ui", StringComparer.Ordinal) || _arguments.Contains("--tun-only-ui", StringComparer.Ordinal))
+        {
+            var reportIndex = Array.IndexOf(_arguments, "--ui-smoke");
+            var directory = reportIndex >= 0 && reportIndex + 1 < _arguments.Length
+                ? _arguments[reportIndex + 1] : Path.Combine(AppDataPaths.Root, "ui-smoke");
+            await RunTunStartupSmokeAsync(directory); return;
         }
         _ipInfoTask = RefreshNodeTypesAsync(_nodes.ToArray(), _settings);
         var smoke = Array.IndexOf(_arguments, "--ui-smoke");
@@ -447,16 +458,13 @@ public partial class MainWindow : Window
         var secrets = new[] { _settings.Password, PasswordBox.Dispatcher.CheckAccess() ? PasswordBox.Password : "" }.Where(s => s.Length > 0);
         foreach (var secret in secrets) message = message.Replace(secret, "***", StringComparison.Ordinal);
         var line = $"[{DateTime.Now:HH:mm:ss}] {message}";
-        lock (_logLock)
-        {
-            if (File.Exists(_logPath) && new FileInfo(_logPath).Length > 5 * 1024 * 1024) File.WriteAllText(_logPath, "");
-            File.AppendAllText(_logPath, line + Environment.NewLine, Encoding.UTF8);
-        }
-        Dispatcher.BeginInvoke(() =>
-        {
-            _logLines.Enqueue(line); while (_logLines.Count > 300) _logLines.Dequeue();
-            LogBox.Text = string.Join(Environment.NewLine, _logLines); LogBox.ScrollToEnd();
-        });
+        _log.Write(line);
+    }
+    private void RefreshLogDisplay()
+    {
+        var text = _log.Snapshot(ref _displayedLogVersion);
+        if (text is null) return;
+        LogBox.Text = text; LogBox.ScrollToEnd();
     }
     private void OpenLogs_Click(object sender, RoutedEventArgs e) => Process.Start(new ProcessStartInfo(AppDataPaths.Logs) { UseShellExecute = true });
     private void Export_Click(object sender, RoutedEventArgs e)
@@ -476,11 +484,12 @@ public partial class MainWindow : Window
         if (_canClose) return;
         e.Cancel = true;
         if (_closing) return;
-        _closing = true; IsEnabled = false; _timer.Stop();
+        _closing = true; IsEnabled = false; _timer.Stop(); _logTimer.Stop();
         _connectCts?.Cancel(); _testCts?.Cancel(); _fetchCts?.Cancel(); _tunCts?.Cancel(); _ipInfoCts?.Cancel();
         foreach (var task in new[] { _connectTask, _testTask, _fetchTask, _tunTask, _ipInfoTask }.Where(t => t is not null))
             try { await task!; } catch (Exception exception) { Log($"退出清理：{exception.Message}"); }
         await StopTunAsync(dispose: true); await DisconnectSessionAsync(); _store.SaveNodes(_nodes);
+        await _log.DisposeAsync();
         _canClose = true; _ = Dispatcher.BeginInvoke(Close);
     }
 

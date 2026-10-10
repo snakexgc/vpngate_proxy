@@ -82,7 +82,7 @@ public sealed class EngineSession : IAsyncDisposable
         _job = new ProcessJob();
         _host = Process.Start(start) ?? throw new IOException("无法启动 VPN 内核宿主。");
         try { _job.Add(_host); } catch { _host.Kill(true); throw; }
-        _logs = Task.WhenAll(ReadLogsAsync(_host.StandardOutput), ReadLogsAsync(_host.StandardError));
+        _logs = Task.Run(() => Task.WhenAll(ReadLogsAsync(_host.StandardOutput), ReadLogsAsync(_host.StandardError)));
         _ = ObserveExitAsync();
         using var readyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         readyTimeout.CancelAfter(TimeSpan.FromSeconds(settings.ConnectionTimeoutSeconds));

@@ -15,7 +15,7 @@ public partial class App : Application
         if (e.Args is ["--tun-worker", var pipeName])
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            Shutdown(await TunWorker.RunAsync(pipeName)); return;
+            Shutdown(await Task.Run(() => TunWorker.RunAsync(pipeName))); return;
         }
         if (e.Args is ["--dns-guard", var pid, var ticks, var identity])
         {
@@ -31,7 +31,7 @@ public partial class App : Application
         if (e.Args is ["--engine-host", var core, var config])
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            Shutdown(await EngineHost.RunAsync(core, config));
+            Shutdown(await Task.Run(() => EngineHost.RunAsync(core, config)));
             return;
         }
         if (SystemDnsLease.NeedsRecovery)
