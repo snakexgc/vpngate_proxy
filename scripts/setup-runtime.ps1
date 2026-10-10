@@ -29,4 +29,6 @@ Expand-Archive -LiteralPath $driverArchive -DestinationPath $driverExtract -Forc
 Copy-Item -LiteralPath (Join-Path $driverExtract 'wintun\bin\amd64\wintun.dll') -Destination (Join-Path $runtimeRoot 'wintun.dll')
 Copy-Item -LiteralPath (Join-Path $driverExtract 'wintun\LICENSE.txt') -Destination (Join-Path $runtimeRoot 'LICENSE-wintun.txt')
 if ((Get-AuthenticodeSignature (Join-Path $runtimeRoot 'wintun.dll')).Status -ne 'Valid') { throw 'Wintun signature validation failed.' }
+Download-Verified 'https://raw.githubusercontent.com/SagerNet/sing-geosite/df6851d87aeaeb9d6a9464288b317e7ff2288d78/geosite-cn.srs' (Join-Path $runtimeRoot 'geosite-cn.srs') '7e5edaa3156918ebb732629f7b4ab3f03040b9940456438f976c2046033fc15c'
+Download-Verified 'https://raw.githubusercontent.com/SagerNet/sing-geoip/7fe82a879ad2666526730c195b55a6d8d9147908/geoip-cn.srs' (Join-Path $runtimeRoot 'geoip-cn.srs') 'ebee603fdf402314b44b9f653cdcf6d9cc9c41e84e2b3515e3123c5c920a93bc'
 Write-Host 'sing-box 1.14.2 and Wintun 0.14.1 are ready. No v2rayN files were modified.'

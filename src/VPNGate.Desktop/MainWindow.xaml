@@ -17,10 +17,11 @@
     <Grid Grid.Row="1" Margin="22,20,22,16">
       <Grid.ColumnDefinitions><ColumnDefinition Width="292" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
       <Border Style="{StaticResource Card}" Padding="20,20">
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid><Grid.RowDefinitions><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
           <StackPanel>
             <TextBlock Text="连接设置" FontSize="17" FontWeight="SemiBold" />
-            <TextBlock Text="流量经 OpenVPN 出口，上游传输由代理承载。" TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,7,0,2" />
+            <TextBlock Text="按模式直连或经 OpenVPN，上游代理承载节点传输。" TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,7,0,2" />
             <StackPanel x:Name="SettingsPanel">
               <TextBlock Text="VPN 上游代理地址" Style="{StaticResource FieldLabel}" />
               <TextBox x:Name="UpstreamBox" Text="http://127.0.0.1:10808" ToolTip="http://、https://、socks5://、socks4://、socks4a://" />
@@ -44,24 +45,44 @@
                 </StackPanel>
               </Expander>
             </StackPanel>
-            <Border Background="#F3F7FF" CornerRadius="7" Padding="12" Margin="0,18,0,0"><StackPanel>
-              <TextBlock Text="TUN 模式" FontWeight="SemiBold" />
-              <Button x:Name="TunButton" Content="开启 TUN" Click="Tun_Click" Margin="0,10,0,0" Style="{StaticResource PrimaryButton}" />
-              <TextBlock x:Name="TunStateText" Text="TUN 已关闭。可随时独立开启或关闭。" FontSize="11" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,8,0,0" />
+            <Border Background="#F3F7FF" CornerRadius="7" Padding="12" Margin="0,16,0,0"><StackPanel>
+              <TextBlock Text="流量模式" FontWeight="SemiBold" />
+              <UniformGrid x:Name="RoutingModePanel" Columns="3" Margin="0,10,0,8">
+                <RadioButton x:Name="GlobalModeButton" GroupName="RoutingMode" Content="全局" Tag="global" Checked="RoutingMode_Checked" />
+                <RadioButton x:Name="RuleModeButton" GroupName="RoutingMode" Content="规则" Tag="rule" Checked="RoutingMode_Checked" />
+                <RadioButton x:Name="DirectModeButton" GroupName="RoutingMode" Content="直连" Tag="direct" Checked="RoutingMode_Checked" />
+              </UniformGrid>
+              <TextBlock x:Name="RoutingStateText" TextWrapping="Wrap" FontSize="11" Foreground="{StaticResource Muted}" />
+              <Expander x:Name="RulesExpander" Header="分流规则" Margin="0,10,0,0"><StackPanel>
+                <TextBlock Text="SagerNet 中国域名 + 中国 IP；局域网始终直连。" TextWrapping="Wrap" FontSize="11" Margin="0,8,0,8" />
+                <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="44" /><ColumnDefinition Width="24" /></Grid.ColumnDefinitions>
+                  <CheckBox x:Name="AutoRulesBox" Content="自动更新" VerticalAlignment="Center" Click="RulesPreferences_Changed" />
+                  <TextBox x:Name="RuleHoursBox" Grid.Column="1" Text="24" Padding="5,5" LostFocus="RulesPreferences_Changed" />
+                  <TextBlock Text="小时" Grid.Column="2" VerticalAlignment="Center" FontSize="10" Margin="3,0,0,0" />
+                </Grid>
+                <TextBlock x:Name="RulesStatusText" Text="内置规则已就绪" FontSize="10" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,8,0,0" />
+                <Button x:Name="UpdateRulesButton" Content="立即更新规则" Click="UpdateRules_Click" Margin="0,8,0,0" />
+              </StackPanel></Expander>
             </StackPanel></Border>
             <Button x:Name="SaveButton" Content="保存设置" Margin="0,18,0,0" Click="Save_Click" />
             <Border Height="1" Background="#E2E8F1" Margin="0,20,0,16" />
             <TextBlock Text="流量路径" FontSize="12" FontWeight="SemiBold" />
-            <TextBlock Text="应用 / TUN → OpenVPN 节点&#x0a;                   → VPN 上游代理" TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11" LineHeight="20" Margin="0,7,0,0" />
+            <TextBlock x:Name="TrafficPathText" Text="应用 / TUN → 国内直连&#x0a;               → 其他经 OpenVPN → 上游代理" TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11" LineHeight="20" Margin="0,7,0,0" />
             <TextBlock x:Name="PrivilegeText" Foreground="{StaticResource Muted}" FontSize="10" Margin="0,15,0,0" />
           </StackPanel>
         </ScrollViewer>
+        <Border Grid.Row="1" Background="#F3F7FF" CornerRadius="7" Padding="12" Margin="0,16,0,0"><StackPanel>
+          <TextBlock Text="TUN 模式" FontWeight="SemiBold" />
+          <Button x:Name="TunButton" Content="开启 TUN" Click="Tun_Click" Margin="0,10,0,0" Style="{StaticResource PrimaryButton}" />
+          <TextBlock x:Name="TunStateText" Text="TUN 已关闭。可随时独立开启或关闭。" FontSize="11" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,8,0,0" />
+        </StackPanel></Border>
+        </Grid>
       </Border>
       <Grid Grid.Column="2">
         <Grid.RowDefinitions><RowDefinition Height="99" /><RowDefinition Height="18" /><RowDefinition Height="*" /><RowDefinition Height="14" /><RowDefinition Height="126" /></Grid.RowDefinitions>
         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="1.35*" /><ColumnDefinition Width="12" /><ColumnDefinition /><ColumnDefinition Width="12" /><ColumnDefinition /></Grid.ColumnDefinitions>
           <Border Style="{StaticResource Card}"><StackPanel><TextBlock Text="当前节点" Foreground="{StaticResource Muted}" FontSize="11" /><TextBlock x:Name="ConnectedNodeText" Text="等待连接" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0" TextTrimming="CharacterEllipsis" /><TextBlock x:Name="ConnectedCountryText" Text="从下方列表选择一个节点" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,5,0,0" /></StackPanel></Border>
-          <Border Grid.Column="2" Style="{StaticResource Card}"><StackPanel><TextBlock Text="连接后网络延时" Foreground="{StaticResource Muted}" FontSize="11" /><TextBlock x:Name="LatencyText" Text="—" FontSize="23" FontWeight="SemiBold" Margin="0,5,0,0" /><TextBlock x:Name="ExitIpText" Text="出口 IP：—" Foreground="{StaticResource Muted}" FontSize="10" Margin="0,3,0,0" /></StackPanel></Border>
+          <Border Grid.Column="2" Style="{StaticResource Card}"><StackPanel><TextBlock Text="节点网络延时" Foreground="{StaticResource Muted}" FontSize="11" /><TextBlock x:Name="LatencyText" Text="—" FontSize="23" FontWeight="SemiBold" Margin="0,5,0,0" /><TextBlock x:Name="ExitIpText" Text="节点出口 IP：—" Foreground="{StaticResource Muted}" FontSize="10" Margin="0,3,0,0" /></StackPanel></Border>
           <Border Grid.Column="4" Style="{StaticResource Card}"><StackPanel><TextBlock Text="本地代理入口" Foreground="{StaticResource Muted}" FontSize="11" /><TextBlock x:Name="LocalProxyText" Text="127.0.0.1:10800" FontSize="16" FontWeight="SemiBold" Margin="0,8,0,0" /><TextBlock x:Name="ModeText" Text="HTTP + SOCKS5" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,5,0,0" /></StackPanel></Border>
         </Grid>
         <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0">

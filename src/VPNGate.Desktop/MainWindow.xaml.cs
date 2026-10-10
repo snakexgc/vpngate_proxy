@@ -82,7 +82,8 @@ public partial class MainWindow : Window
         UpdateCountries(); ApplySort();
         NodeGrid.SelectedItem = _nodes.FirstOrDefault(n => n.Id == _settings.SelectedNodeId) ?? _view.Cast<VpnNode>().FirstOrDefault();
         UpdateControls();
-        Log("程序就绪。上游代理承载 OpenVPN 数据，本地 HTTP/SOCKS5 入口仅经 OpenVPN 出口。");
+        if (!_arguments.Contains("--ui-smoke", StringComparer.Ordinal)) _rulesLoopTask = RunRulesLoopAsync();
+        Log("程序就绪。上游代理承载 OpenVPN 数据，本地 HTTP/SOCKS5 和 TUN 按所选模式分流。");
         if (_nodes.Count > 0) Log($"已载入 {_nodes.Count} 个缓存节点，可点击刷新获取当前列表。");
         var preview = Array.IndexOf(_arguments, "--ui-preview");
         if (preview >= 0 && preview + 1 < _arguments.Length)
@@ -105,6 +106,12 @@ public partial class MainWindow : Window
                 ? _arguments[reportIndex + 1] : Path.Combine(AppDataPaths.Root, "ui-smoke");
             await RunTunStartupSmokeAsync(directory); return;
         }
+        if (_arguments.Contains("--routing-ui", StringComparer.Ordinal))
+        {
+            var index = Array.IndexOf(_arguments, "--ui-smoke");
+            await RunRoutingSmokeAsync(index >= 0 && index + 1 < _arguments.Length ? _arguments[index + 1] : Path.Combine(AppDataPaths.Root, "routing-smoke"));
+            return;
+        }
         _ipInfoTask = RefreshNodeTypesAsync(_nodes.ToArray(), _settings);
         var smoke = Array.IndexOf(_arguments, "--ui-smoke");
         if (smoke >= 0)
@@ -125,6 +132,8 @@ public partial class MainWindow : Window
         ListenBox.Text = settings.ListenAddress; PortBox.Text = settings.ListenPort.ToString(CultureInfo.InvariantCulture);
         ConcurrencyBox.Text = settings.TestConcurrency.ToString(CultureInfo.InvariantCulture); TimeoutBox.Text = settings.ConnectionTimeoutSeconds.ToString(CultureInfo.InvariantCulture);
         ProbeUrlBox.Text = settings.ProbeUrl;
+        SetRoutingModeUi(settings.RoutingMode);
+        AutoRulesBox.IsChecked = settings.AutoUpdateRules; RuleHoursBox.Text = settings.RuleUpdateHours.ToString(CultureInfo.InvariantCulture);
     }
     private AppSettings ReadSettings()
     {
@@ -134,6 +143,8 @@ public partial class MainWindow : Window
         settings.ListenAddress = ListenBox.Text.Trim(); settings.ListenPort = Number(PortBox, "本地端口");
         settings.TestConcurrency = Number(ConcurrencyBox, "并发数"); settings.ConnectionTimeoutSeconds = Number(TimeoutBox, "连接超时");
         settings.ProbeUrl = ProbeUrlBox.Text.Trim(); settings.SelectedNodeId = (NodeGrid.SelectedItem as VpnNode)?.Id ?? "";
+        settings.RoutingMode = DirectModeButton.IsChecked == true ? "direct" : GlobalModeButton.IsChecked == true ? "global" : "rule";
+        settings.AutoUpdateRules = AutoRulesBox.IsChecked == true; settings.RuleUpdateHours = Number(RuleHoursBox, "规则更新间隔");
         var proxy = settings.Validate(); settings.UpstreamProxy = proxy.SafeAddress; settings.Username = proxy.Username; settings.Password = proxy.Password;
         return settings;
     }
@@ -228,7 +239,7 @@ public partial class MainWindow : Window
             var watch = Stopwatch.StartNew();
             await session.StartAsync(node, settings, settings.ListenAddress, settings.ListenPort, _connectCts.Token);
             var connectMs = watch.Elapsed.TotalMilliseconds;
-            var samples = await ProbeService.MeasureAsync(session.Port, settings, _connectCts.Token, settings.ListenAddress);
+            var samples = await ProbeService.MeasureAsync(session.ProbePort, settings, _connectCts.Token);
             node.Apply(new(node.Id, true, ProbeService.Median(samples), connectMs, "", DateTimeOffset.Now, Samples: samples));
             _connectedAt = DateTimeOffset.Now;
             LatencyText.Text = node.LatencyText; LocalProxyText.Text = $"{settings.ListenAddress}:{settings.ListenPort}";
@@ -237,7 +248,7 @@ public partial class MainWindow : Window
             Log($"已连接 {node.CountryDisplay} {node.Ip}，实际网络延时 {node.LatencyText}，本地端口 {settings.ListenPort}。");
             ProgressText.Text = $"已连接 {node.HostName} · {node.CountryLabel}";
             FooterText.Text = $"已连接 · {node.CountryLabel} · {node.Ip} · 本地端口 {settings.ListenPort}";
-            try { ExitIpText.Text = "出口 IP：" + await ProbeService.ExitIpAsync(session.Port, _connectCts.Token, settings.ListenAddress); }
+            try { ExitIpText.Text = "节点出口 IP：" + await ProbeService.ExitIpAsync(session.ProbePort, _connectCts.Token); }
             catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException) { Log($"出口 IP 查询暂不可用：{exception.Message}"); }
             _store.SaveNodes(_nodes);
         }
@@ -261,7 +272,7 @@ public partial class MainWindow : Window
     {
         var session = _session; _session = null;
         if (session is not null) await session.DisposeAsync();
-        _connectedAt = null; LatencyText.Text = "—"; ExitIpText.Text = "出口 IP：—"; ConnectedNodeText.Text = "等待连接";
+        _connectedAt = null; LatencyText.Text = "—"; ExitIpText.Text = "节点出口 IP：—"; ConnectedNodeText.Text = "等待连接";
         ConnectedCountryText.Text = "从下方列表选择一个节点"; UpdateTunControls();
     }
 
@@ -330,7 +341,9 @@ public partial class MainWindow : Window
         TunStateText.Text = _tunBusy ? _tunStopping ? "正在清理网卡和临时 DNS 策略…" : "正在开启 TUN，可点击按钮取消。"
             : on ? _connectedAt is null ? "TUN 已开启，等待 OpenVPN；连接节点后开始转发。" : "TUN 已开启，正在通过当前 OpenVPN 转发。"
             : "TUN 已关闭。可随时独立开启或关闭。";
-        ModeText.Text = on ? _connectedAt is null ? "TUN · 等待 OpenVPN" : "TUN + HTTP + SOCKS5" : "HTTP + SOCKS5";
+        ModeText.Text = $"{RoutingModes.Label(_settings.RoutingMode)} · " + (on ? "TUN + HTTP + SOCKS5" : "HTTP + SOCKS5");
+        if (on && _settings.RoutingMode == "direct") TunStateText.Text = "TUN 已开启，所有流量直连，无需 OpenVPN 节点。";
+        else if (on && _connectedAt is null && _settings.RoutingMode == "rule") TunStateText.Text = "TUN 已开启，国内流量直连；其他流量等待 OpenVPN。";
     }
 
     private void TestAll_Click(object sender, RoutedEventArgs e) => _testTask = TestNodesAsync(_nodes.ToArray());
@@ -433,17 +446,18 @@ public partial class MainWindow : Window
     private void UpdateControls()
     {
         if (!_loaded || _closing) return;
-        SettingsPanel.IsEnabled = !_connectionBusy && _session is null && !_testing && !_fetching && !_tunBusy && _tunSession?.IsRunning != true;
+        SettingsPanel.IsEnabled = !_connectionBusy && _session is null && !_testing && !_fetching && !_tunBusy && !_routingBusy && _tunSession?.IsRunning != true;
         SaveButton.IsEnabled = SettingsPanel.IsEnabled;
-        FetchButton.IsEnabled = !_fetching && !_testing && !_connectionBusy;
+        FetchButton.IsEnabled = !_fetching && !_testing && !_connectionBusy && !_routingBusy;
         FetchButton.Content = _fetching ? "正在获取…" : "获取 / 刷新节点";
-        ConnectButton.IsEnabled = NodeGrid.SelectedItem is VpnNode && !_connectionBusy && !_fetching;
+        ConnectButton.IsEnabled = NodeGrid.SelectedItem is VpnNode && !_connectionBusy && !_fetching && !_routingBusy;
         ConnectButton.Content = _connectionBusy ? "正在连接…" : _session is null ? "连接选中节点" : "切换选中节点";
         DisconnectButton.IsEnabled = _session is not null || _connectionBusy;
-        TestSelectedButton.IsEnabled = NodeGrid.SelectedItems.Count > 0 && !_testing && !_connectionBusy && !_fetching;
-        TestAllButton.IsEnabled = _nodes.Count > 0 && !_testing && !_connectionBusy && !_fetching;
+        TestSelectedButton.IsEnabled = NodeGrid.SelectedItems.Count > 0 && !_testing && !_connectionBusy && !_fetching && !_routingBusy;
+        TestAllButton.IsEnabled = _nodes.Count > 0 && !_testing && !_connectionBusy && !_fetching && !_routingBusy;
         CancelTestsButton.IsEnabled = _testing;
         UpdateTunControls();
+        UpdateRoutingControls();
     }
     private void UpdateCount() => NodeCountText.Text = _view.Count == _nodes.Count ? $"{_nodes.Count} 个节点" : $"{_view.Count} / {_nodes.Count} 个节点";
     private void SetStatus(string text, string background, string color)
@@ -486,10 +500,12 @@ public partial class MainWindow : Window
         if (_closing) return;
         _closing = true; IsEnabled = false; _timer.Stop(); _logTimer.Stop();
         _connectCts?.Cancel(); _testCts?.Cancel(); _fetchCts?.Cancel(); _tunCts?.Cancel(); _ipInfoCts?.Cancel();
-        foreach (var task in new[] { _connectTask, _testTask, _fetchTask, _tunTask, _ipInfoTask }.Where(t => t is not null))
+        _rulesCts.Cancel();
+        foreach (var task in new[] { _connectTask, _testTask, _fetchTask, _tunTask, _ipInfoTask, _routingTask, _rulesLoopTask, _ruleUpdateTask }.Where(t => t is not null))
             try { await task!; } catch (Exception exception) { Log($"退出清理：{exception.Message}"); }
         await StopTunAsync(dispose: true); await DisconnectSessionAsync(); _store.SaveNodes(_nodes);
         await _log.DisposeAsync();
+        _rulesCts.Dispose();
         _canClose = true; _ = Dispatcher.BeginInvoke(Close);
     }
 
@@ -548,6 +564,24 @@ public partial class MainWindow : Window
                 if (_session?.IsRunning == true && _connectedAt is not null) break;
             }
             if (_session?.IsRunning != true || _connectedAt is null) throw new IOException("UI 真实连接失败。");
+            if (_arguments.Contains("--routing-connected-ui", StringComparer.Ordinal))
+            {
+                var vpn = _session; var pid = vpn.HostProcessId;
+                foreach (var (button, mode) in new[] { (GlobalModeButton, "global"), (DirectModeButton, "direct"), (RuleModeButton, "rule") })
+                {
+                    button.IsChecked = true; if (_routingTask is not null) await _routingTask;
+                    if (_settings.RoutingMode != mode || _session != vpn || vpn.HostProcessId != pid || !vpn.IsRunning)
+                        throw new IOException("切换模式重建了 OpenVPN 或未成功生效。");
+                    await ProbeService.MeasureAsync(vpn.ProbePort, _settings, CancellationToken.None);
+                    if (mode != "global")
+                    {
+                        using var client = ProbeService.ProxyClient(vpn.Port, 12, _settings.ListenAddress);
+                        using var result = await client.GetAsync("https://www.baidu.com/"); result.EnsureSuccessStatusCode();
+                    }
+                }
+                checks["allModesKeepSameVpnProcess"] = true; checks["vpnProbeWorksInEveryMode"] = true;
+                checks["domesticLocalProxySplitsCorrectly"] = true;
+            }
             if (testTun)
             {
                 var vpn = _session;

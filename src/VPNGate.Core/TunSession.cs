@@ -17,6 +17,9 @@ public sealed class TunSession : IAsyncDisposable
     private TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _cycleActive;
+    private RoutingControl? _control;
+    public Task SetRoutingModeAsync(string mode, CancellationToken token = default) =>
+        (_control ?? throw new InvalidOperationException("TUN 尚未启动。")).SetModeAsync(mode, token);
     public bool IsRunning { get; private set; }
     public int? WorkerProcessId => _worker?.Id;
     public event Action<string>? Log;
@@ -27,6 +30,8 @@ public sealed class TunSession : IAsyncDisposable
         if (_disposing || _cycleActive) throw new InvalidOperationException("此 TUN 会话已经启动或已关闭。");
         settings.Validate();
         await Task.Run(() => EngineRuntime.Verify(EngineRuntime.CorePath), cancellationToken);
+        await new RoutingRuleSets().EnsureAsync(cancellationToken);
+        _control = RoutingControl.Create(settings.ListenPort);
         _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
         _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
         using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -52,7 +57,7 @@ public sealed class TunSession : IAsyncDisposable
         _cycleActive = true;
         var target = settings.Copy(); target.UpstreamProxy = settings.Validate().SafeAddress;
         target.Password = ""; target.Username = ""; target.ProtectedPassword = "";
-        await _writer!.WriteLineAsync(JsonSerializer.Serialize(target));
+        await _writer!.WriteLineAsync(JsonSerializer.Serialize(new TunStartRequest(target, _control)));
         await _ready.Task.WaitAsync(startup.Token);
         IsRunning = true;
     }
@@ -137,12 +142,13 @@ public static class TunWorker
             {
             var json = await reader.ReadLineAsync();
             if (json is null || json == "EXIT") return 0;
-            var settings = JsonSerializer.Deserialize<AppSettings>(json) ?? throw new InvalidDataException("缺少 TUN 配置。");
+            var request = JsonSerializer.Deserialize<TunStartRequest>(json) ?? throw new InvalidDataException("缺少 TUN 配置。");
+            var settings = request.Settings;
             settings.Validate(); await SystemDnsLease.RecoverStaleAsync();
             directory = Path.Combine(AppDataPaths.Sessions, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory); AppDataPaths.RestrictDirectory(directory);
             var config = Path.Combine(directory, "config.json");
-            await File.WriteAllTextAsync(config, CoreConfig.Serialize(CoreConfig.BuildTun(settings, CoreConfig.PhysicalInterface())), new UTF8Encoding(false));
+            await File.WriteAllTextAsync(config, CoreConfig.Serialize(CoreConfig.BuildTun(settings, CoreConfig.PhysicalInterface(), request.Control)), new UTF8Encoding(false));
             await EngineHost.RunAsync(EngineRuntime.CorePath, config, reader, writer);
             }
             catch (Exception exception)
@@ -157,3 +163,4 @@ public static class TunWorker
         }
     }
 }
+public sealed record TunStartRequest(AppSettings Settings, RoutingControl Control);

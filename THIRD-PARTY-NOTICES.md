@@ -12,6 +12,17 @@ Executable SHA256: `7bbef1dea9189ee12799ae834ea4b4658355da25c47a21ad8804904c0ccd
 
 Copyright SagerNet and contributors. License: GPL-3.0-or-later, with the upstream naming notice. See `runtime/COPYING-sing-box`, `runtime/LICENSE-sing-box` and `runtime/GPL-3.0.txt`; upstream provides complete source and dependency information at the versioned source link above. The GUI invokes the unmodified core as an independent process.
 
+## SagerNet country rule sets
+
+Bundled initial data: `runtime/geosite-cn.srs` and `runtime/geoip-cn.srs`.
+
+- geosite-cn source: https://github.com/SagerNet/sing-geosite/tree/df6851d87aeaeb9d6a9464288b317e7ff2288d78
+  SHA256: `7e5edaa3156918ebb732629f7b4ab3f03040b9940456438f976c2046033fc15c`
+- geoip-cn source: https://github.com/SagerNet/sing-geoip/tree/7fe82a879ad2666526730c195b55a6d8d9147908
+  SHA256: `ebee603fdf402314b44b9f653cdcf6d9cc9c41e84e2b3515e3123c5c920a93bc`
+
+Copyright SagerNet and data contributors. Upstream repositories use GPL-3.0-or-later; see `runtime/LICENSE-sing-geosite.txt`, `runtime/LICENSE-sing-geoip.txt` and `runtime/GPL-3.0.txt`. The application downloads subsequent country-data updates from each repository's `rule-set` branch and validates them with the unmodified sing-box core before use.
+
 ## Wintun 0.14.1
 
 Source: https://git.zx2c4.com/wintun/

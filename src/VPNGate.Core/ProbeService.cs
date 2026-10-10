@@ -54,7 +54,7 @@ public static class ProbeService
         {
             await session.StartAsync(node, settings, "127.0.0.1", EngineRuntime.FreePort(), cancellationToken);
             var connected = watch.Elapsed.TotalMilliseconds;
-            var samples = await MeasureAsync(session.Port, settings, cancellationToken);
+            var samples = await MeasureAsync(session.ProbePort, settings, cancellationToken);
             return new(node.Id, true, Median(samples), connected, "", DateTimeOffset.Now, Samples: samples);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

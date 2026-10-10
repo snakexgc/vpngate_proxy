@@ -52,6 +52,10 @@ public sealed class EngineSession : IAsyncDisposable
     public event Action<string>? Failed;
     public VpnNode? Node { get; private set; }
     public int Port { get; private set; }
+    public int ProbePort { get; private set; }
+    private RoutingControl? _control;
+    public Task SetRoutingModeAsync(string mode, CancellationToken token = default) =>
+        (_control ?? throw new InvalidOperationException("内核尚未启动。")).SetModeAsync(mode, token);
     public string ProxyAddress => $"http://127.0.0.1:{Port}";
     public bool IsRunning => _host is { HasExited: false } && !_disposing;
     public int? HostProcessId => _host?.Id;
@@ -60,19 +64,22 @@ public sealed class EngineSession : IAsyncDisposable
     public async Task StartAsync(VpnNode node, AppSettings settings, string listenAddress, int listenPort, CancellationToken cancellationToken)
     {
         if (_host is not null) throw new InvalidOperationException("此会话已经启动。");
-        EngineRuntime.Verify(EngineRuntime.CorePath);
+        await Task.Run(() => EngineRuntime.Verify(EngineRuntime.CorePath), cancellationToken);
         settings.Validate();
+        await new RoutingRuleSets().EnsureAsync(cancellationToken);
         var ip = IPAddress.Parse(listenAddress);
         var check = new TcpListener(ip, listenPort);
         try { check.Server.ExclusiveAddressUse = true; check.Start(); }
         catch (SocketException) { throw new IOException($"本地代理端口 {listenPort} 已被占用，请换一个端口。"); }
         finally { check.Stop(); }
         Node = node; Port = listenPort;
+        do { ProbePort = EngineRuntime.FreePort(); } while (ProbePort == listenPort);
+        _control = RoutingControl.Create(listenPort, ProbePort);
         _directory = Path.Combine(AppDataPaths.Sessions, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_directory);
         AppDataPaths.RestrictDirectory(_directory);
         var configPath = Path.Combine(_directory, "config.json");
-        var config = CoreConfig.Build(node, settings, listenAddress, listenPort);
+        var config = CoreConfig.Build(node, settings, listenAddress, listenPort, _control, ProbePort);
         await File.WriteAllTextAsync(configPath, CoreConfig.Serialize(config), new UTF8Encoding(false), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var start = new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = false, CreateNoWindow = true,

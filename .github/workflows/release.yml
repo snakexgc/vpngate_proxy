@@ -42,6 +42,11 @@ jobs:
       - name: Verify GUI responsiveness under TUN log traffic
         run: ./scripts/test-ui-logs.ps1
 
+      - name: Verify native routing modes and rule updates
+        run: |
+          & './tests/VPNGate.SelfTest/bin/Release/net10.0-windows/VPNGate.SelfTest.exe' --routing --output 'artifacts/routing-tests.json'
+          if ($LASTEXITCODE -ne 0) { throw 'Routing checks failed.' }
+
       - name: Publish ZIP to GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}

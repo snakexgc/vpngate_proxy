@@ -5,30 +5,35 @@ using System.Text.Json.Nodes;
 
 namespace VPNGate.Core;
 
-public static class CoreConfig
+public static partial class CoreConfig
 {
     public const string TunName = "VPNGate-TUN";
-    public static JsonObject Build(VpnNode node, AppSettings settings, string listenAddress, int listenPort)
+    public static JsonObject Build(VpnNode node, AppSettings settings, string listenAddress, int listenPort, RoutingControl? control = null, int? probePort = null)
     {
         var proxy = settings.Validate();
         var upstream = proxy.ToOutbound();
         if (proxy.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
         { upstream["server"] = "127.0.0.1"; upstream.Remove("domain_resolver"); }
-        var bootstrap = HttpsDns("bootstrap");
         var physical = PhysicalInterface();
-        if (physical.Length > 0) bootstrap["bind_interface"] = physical;
+        var inbounds = new JsonArray(new JsonObject { ["type"] = "mixed", ["tag"] = "local", ["listen"] = listenAddress, ["listen_port"] = listenPort });
+        if (probePort is { } port) inbounds.Add(new JsonObject { ["type"] = "mixed", ["tag"] = "probe-vpn", ["listen"] = "127.0.0.1", ["listen_port"] = port });
+        var rules = new JsonArray();
+        if (probePort is not null) rules.Add(Route("inbound", "probe-vpn", "vpn"));
+        rules.Add(new JsonObject { ["port"] = 53, ["action"] = "hijack-dns" });
+        AddTrafficRules(rules, "vpn");
         // Proxy hostname bootstrap must work before OpenVPN connects, even when TUN is already on.
         return new JsonObject {
             ["log"] = LogSettings(),
-            ["dns"] = DnsSettings(new JsonArray(HttpsDns("vpn-dns", "vpn"), bootstrap)),
-            ["inbounds"] = new JsonArray(new JsonObject { ["type"] = "mixed", ["tag"] = "local", ["listen"] = listenAddress, ["listen_port"] = listenPort }),
+            ["dns"] = TrafficDns("vpn", physical),
+            ["inbounds"] = inbounds,
             ["endpoints"] = new JsonArray(OpenVpnProfile.ToEndpoint(node.OpenVpnConfig, proxy, settings.ConnectionTimeoutSeconds)),
-            ["outbounds"] = new JsonArray(upstream),
-            ["route"] = new JsonObject { ["final"] = "vpn", ["default_domain_resolver"] = "vpn-dns" }
+            ["outbounds"] = new JsonArray(upstream, PhysicalOutbound(physical)),
+            ["route"] = TrafficRoute(rules, "vpn"),
+            ["experimental"] = (control ?? RoutingControl.Create(listenPort)).Configuration(settings.RoutingMode)
         };
     }
     // TUN starts without a node. A later OpenVPN session supplies the configured local SOCKS5 exit.
-    public static JsonObject BuildTun(AppSettings settings, string physicalInterface)
+    public static JsonObject BuildTun(AppSettings settings, string physicalInterface, RoutingControl? control = null)
     {
         var proxy = settings.Validate();
         if (settings.ListenPort == 53) throw new ArgumentException("开启 TUN 时，本地代理端口不能使用 DNS 专用端口 53。");
@@ -43,10 +48,12 @@ public static class CoreConfig
             new JsonObject { ["inbound"] = "tun", ["process_name"] = new JsonArray("v2rayN.exe", "xray.exe", "v2ray.exe", "sing-box.exe", "mihomo.exe", "clash.exe", "clash-meta.exe"),
                 ["action"] = "route", ["outbound"] = "physical" },
             new JsonObject { ["inbound"] = "tun", ["port"] = 53, ["action"] = "hijack-dns" },
-            new JsonObject { ["inbound"] = "tun", ["ip_is_private"] = true, ["action"] = "route", ["outbound"] = "physical" });
+            new JsonObject { ["inbound"] = "tun", ["ip_is_private"] = true, ["action"] = "route", ["outbound"] = "physical" },
+            new JsonObject { ["inbound"] = "tun", ["action"] = "sniff", ["timeout"] = "100ms" });
+        AddTrafficRules(rules, "vpn-local");
         return new JsonObject {
             ["log"] = LogSettings(),
-            ["dns"] = DnsSettings(new JsonArray(HttpsDns("vpn-dns", "vpn-local"), new JsonObject { ["type"] = "local", ["tag"] = "bootstrap" })),
+            ["dns"] = TrafficDns("vpn-local", physicalInterface),
             ["inbounds"] = new JsonArray(
                 new JsonObject { ["type"] = "tun", ["tag"] = "tun", ["interface_name"] = TunName,
                     ["address"] = new JsonArray("172.30.222.1/30", "fdfe:7667:6174::1/126"), ["mtu"] = 1400,
@@ -56,8 +63,9 @@ public static class CoreConfig
             ["outbounds"] = new JsonArray(
                 new JsonObject { ["type"] = "socks", ["tag"] = "vpn-local", ["server"] = ProbeAddress(settings.ListenAddress), ["server_port"] = settings.ListenPort,
                     ["version"] = "5", ["connect_timeout"] = "3s" },
-                new JsonObject { ["type"] = "direct", ["tag"] = "physical", ["bind_interface"] = physicalInterface, ["domain_resolver"] = "bootstrap" }),
-            ["route"] = new JsonObject { ["rules"] = rules, ["final"] = "vpn-local", ["default_domain_resolver"] = "vpn-dns", ["find_process"] = true }
+                PhysicalOutbound(physicalInterface)),
+            ["route"] = TrafficRoute(rules, "vpn-local", findProcess: true),
+            ["experimental"] = (control ?? RoutingControl.Create(settings.ListenPort)).Configuration(settings.RoutingMode)
         };
     }
     public static string ProbeAddress(string address) => address == "0.0.0.0" ? "127.0.0.1" : address == "::" ? "::1" : address;

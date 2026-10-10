@@ -6,6 +6,7 @@ artifacts/
 *.user
 runtime/*.exe
 runtime/*.dll
+runtime/*.srs
 .vs/
 .idea/
 *.pdb

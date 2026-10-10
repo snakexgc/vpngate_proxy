@@ -2,7 +2,7 @@
 
 [下载最新版 ZIP](https://github.com/snakexgc/vpngate_proxy/releases/latest) · [GitHub Actions](https://github.com/snakexgc/vpngate_proxy/actions)
 
-原生 Windows GUI，使用 VPNGate 公共 OpenVPN 节点，并通过指定的上游代理传输 OpenVPN 数据。支持本地 HTTP / SOCKS5 混合代理，以及 Windows TUN 全局公网流量转发。
+原生 Windows GUI，使用 VPNGate 公共 OpenVPN 节点，并通过指定的上游代理传输 OpenVPN 数据。本地 HTTP / SOCKS5 混合代理和 Windows TUN 支持全局、规则、直连三种流量模式。
 
 ## 使用
 
@@ -13,7 +13,7 @@
 3. 点击「获取 / 刷新节点」，从 VPNGate 官方 HTTPS 接口获取所有公开节点。上游代理同样用于获取列表。
 4. 选择节点，点击「连接选中节点」。连接成功后，可让浏览器或其他程序使用 `http://127.0.0.1:10800` 或 `socks5://127.0.0.1:10800`。
 5. 双击另一个节点，或选择后点击「切换选中节点」，即可切换。切换会关闭旧连接，已有传输需要重新建立。
-6. 点击独立的「开启 TUN」按钮即可创建 `VPNGate-TUN` 网卡，再次点击「关闭 TUN」即可移除。不需要先连接 OpenVPN；未连接时显示「等待 OpenVPN」，连接节点后自动开始转发。OpenVPN 正在连接、已连接或已断开时，TUN 按钮都可操作。开启 / 关闭 TUN 不重建 OpenVPN、不关闭本地代理；断开 / 切换节点也不会关闭 TUN。TUN 开启且没有节点连接时，公网流量等待节点，不自动绕过 VPN。
+6. 点击独立的「开启 TUN」按钮即可创建 `VPNGate-TUN` 网卡，再次点击「关闭 TUN」即可移除。不需要先连接 OpenVPN：直连模式可以直接联网；规则模式允许国内和局域网流量直连，其余等待节点；全局模式的公网流量等待节点。OpenVPN 正在连接、已连接或已断开时，TUN 按钮都可操作。开启 / 关闭 TUN 不重建 OpenVPN、不关闭本地代理；断开 / 切换节点也不会关闭 TUN。
 7. 「测全部」会对当前获取的全部节点逐一建立独立 OpenVPN 会话；「测选中」支持 Ctrl / Shift 多选。测试不替换当前使用的连接。可随时取消，排队工作会停止，测试会话自动清理。
 8. 使用「网络延时 ↑ / ↓」「国家 A → Z」，或点击表头排序。失败及未测试节点排在延时结果之后。国家排序使用 ISO 国家代码。国家筛选和搜索可组合使用。
 9. 「节点类型」位于 IP 与网络延时之间，显示「机房（官方中继）」「机房」「住宅（推测）」或「未知」。优先使用源中的 public-vpn-* 名称和已知官方 219.100.37.0/24 网段识别官方中继，不对这批节点额外查询。其他节点通过 IP-API 查询，信息按 IP 保存到本地，有效期为查询成功后的 7 天；期限内刷新节点、切换节点、重新启动程序都会直接复用缓存。只查询没有信息的新 IP 或已过期 IP；失败或空结果冷却 5 分钟后才允许重试。每批最多 100 个不同 IP，同一 IP 去重；遵守并持久保存接口的限流等待时间。悬停类型可查看识别依据、运营商、组织、ASN、来源和时间；支持按类型排序、搜索，并包含在 CSV 导出中。类型查询在后台运行，不阻止连接或测速。
@@ -22,7 +22,23 @@
 
 HTTP / HTTPS / SOCKS4 上游只支持 OpenVPN **TCP** 传输。UDP 节点仍显示在列表中，但测试时会明确说明不兼容；SOCKS5 上游需支持 UDP ASSOCIATE 才能连接 UDP 节点。不会把 UDP 节点伪装成 TCP。
 
-GUI 的「网络延时」是 OpenVPN 连接完成后，经隧道访问 HTTPS 测试地址的请求往返时间。先预热 DNS / CONNECT / TLS，再取三次请求的中位数。默认测试地址是 `https://www.gstatic.com/generate_204`，可修改。它与 VPNGate 公布的 Ping 分列展示；不使用节点端口连接耗时冒充网络延时。并发默认 4，可配置 1–12。
+GUI 的「节点网络延时」始终是 OpenVPN 连接完成后，经隧道访问 HTTPS 测试地址的请求往返时间。使用独立的回环测速入口强制走节点，即使当前选择直连模式或测试地址匹配国内规则，也不会将直连延时或本机出口 IP 当作节点结果。先预热 DNS / CONNECT / TLS，再取三次请求的中位数。默认测试地址是 `https://www.gstatic.com/generate_204`，可修改。它与 VPNGate 公布的 Ping 分列展示；不使用节点端口连接耗时冒充网络延时。并发默认 4，可配置 1–12。
+
+## 流量模式与规则更新
+
+GUI 的「流量模式」可在未连接时选择、或在连接后切换；切换不会重建 OpenVPN 会话或 TUN 内核。分流规则通过 sing-box 的 `clash_mode` 和二进制 `rule_set` 生效，本地代理和 TUN 使用相同模式。模式与新规则作用于新建连接，已有长连接保持原来的出口。
+
+| 模式 | 公网流量 | 没有 OpenVPN 节点时的 TUN |
+| --- | --- | --- |
+| 全局 | 经 OpenVPN 节点，再由上游代理承载传输 | 等待节点，不自动改为直连 |
+| 规则（默认） | 中国域名、中国 IP 直连，其他经 OpenVPN | 国内流量可用，其他等待节点 |
+| 直连 | 经物理网卡直连 | 无需节点即可联网 |
+
+局域网始终直连；现有 v2rayN / Xray 等上游客户端的传输连接从物理网卡发出，避免环路。国内判定采用 SagerNet 的 [geosite-cn](https://github.com/SagerNet/sing-geosite/tree/rule-set) 和 [geoip-cn](https://github.com/SagerNet/sing-geoip/tree/rule-set)。TUN 会嗅探 HTTP / TLS / QUIC 域名，并结合目标 IP 匹配；DNS 也按模式分流，直连和国内域名使用绑定物理网卡的加密 DNS，其他使用节点内的加密 DNS。
+
+便携包内置经 SHA256 校验的初始规则，首次运行不依赖下载规则。规则缓存位于 `%LOCALAPPDATA%\VPNGateXray\routing-rules`。在「分流规则」中可查看检查 / 更新时间、启用或停用自动更新、调整 1–168 小时的更新间隔（默认 24 小时），或点击「立即更新规则」。运行时每小时检查是否到期，也会在启动和修改更新策略时检查。查询通过已配置的上游代理完成，使用 ETag 条件请求复用未变的数据；自动检查失败至少等待 15 分钟再重试。
+
+两个规则文件均下载、经过实际 sing-box 解析校验后才替换缓存。下载、格式校验或安装失败会保留已有规则并在 GUI 显示失败状态。文件被替换后，正在运行的内核自动重新载入，无需断开节点、重启网卡或再次授权。手动更新不受自动更新开关和更新间隔限制。本地 HTTP / SOCKS5 入口随 OpenVPN 会话启动；TUN 可以独立进行规则分流或直连。
 
 ## 与现有 v2rayN 共存
 
@@ -30,9 +46,9 @@ GUI 的「网络延时」是 OpenVPN 连接完成后，经隧道访问 HTTPS 测
 
 OpenVPN 代理和 TUN 使用两个独立内核。TUN 通过配置的本地 SOCKS5 入口接入 OpenVPN，所以可以随时单独开关。普通用户 GUI 首次开启 TUN 时只提升专用后台进程，GUI 和已连接的 OpenVPN 保持运行；本次软件运行期间反复开关复用已授权进程，无需反复重启 GUI。退出软件会同时清理两个会话。
 
-TUN 模式另提供本机 TCP / UDP DNS 入口，经 OpenVPN 内的加密 DNS 上游解析。默认监听 `127.0.0.1:53`；存在已运行的 Wintun 网卡时，使用该网卡已有的本机 IPv4 地址，以避开其对回环 DNS 的阻断。只绑定服务，不修改该网卡或其客户端配置。为确保 Windows 系统 DNS 不被其他 TUN 分流，连接期间添加本软件独立标识的临时 NRPT 规则；断开后只删除这条规则。独立守护进程也会在程序意外退出时恢复；若电脑意外重启，软件下次启动会检查自己的恢复记录，必要时请求管理员权限清理。没有修改其他网卡的 DNS、其他 NRPT 规则或 v2rayN 配置，也不叠加全局 WFP DNS 阻断规则。选定地址上的端口 53 必须可用。
+TUN 模式另提供本机 TCP / UDP DNS 入口，按所选模式经直连或 OpenVPN 内的加密 DNS 上游解析。默认监听 `127.0.0.1:53`；存在已运行的 Wintun 网卡时，使用该网卡已有的本机 IPv4 地址，以避开其对回环 DNS 的阻断。只绑定服务，不修改该网卡或其客户端配置。为确保 Windows 系统 DNS 不被其他 TUN 分流，TUN 开启期间添加本软件独立标识的临时 NRPT 规则；关闭 TUN 后只删除这条规则。独立守护进程也会在程序意外退出时恢复；若电脑意外重启，软件下次启动会检查自己的恢复记录，必要时请求管理员权限清理。没有修改其他网卡的 DNS、其他 NRPT 规则或 v2rayN 配置，也不叠加全局 WFP DNS 阻断规则。选定地址上的端口 53 必须可用。
 
-如有多个有效的物理网卡，当前自动优先选择带 IPv4 网关的以太网，其次选择 Wi-Fi。节点主要提供 IPv4 出口；TUN 捕获 IPv6 后交给同一 VPN 端点，节点不支持时返回失败，不自动绕过 VPN。公共节点的可用性随时间变化。
+如有多个有效的物理网卡，当前自动优先选择带 IPv4 网关的以太网，其次选择 Wi-Fi。节点主要提供 IPv4 出口；需要经节点转发的 IPv6 流量同样交给 VPN 端点，节点不支持时返回失败。明确选择直连或匹配直连规则的流量从物理网卡发出。公共节点的可用性随时间变化。
 
 ## 数据与诊断
 
@@ -66,6 +82,9 @@ dotnet build vpngate_proxy.sln -c Release
 .\src\VPNGate.Desktop\bin\Release\net10.0-windows\vpngate_proxy.exe --ui-smoke artifacts\ui
 .\scripts\test-ui-logs.ps1
 .\src\VPNGate.Desktop\bin\Release\net10.0-windows\vpngate_proxy.exe --ui-smoke artifacts\tun-startup --tun-only-ui
+.\tests\VPNGate.SelfTest\bin\Release\net10.0-windows\VPNGate.SelfTest.exe --routing --output artifacts\routing-tests.json
+.\src\VPNGate.Desktop\bin\Release\net10.0-windows\vpngate_proxy.exe --ui-smoke artifacts\routing-ui --routing-ui
+.\src\VPNGate.Desktop\bin\Release\net10.0-windows\vpngate_proxy.exe --ui-smoke artifacts\routing-connected --routing-connected-ui
 ```
 
 TUN 实测运行同一个 `VPNGate.SelfTest.exe --tun --output artifacts\tun-tests.json` 即可；普通用户运行时会请求后台进程的管理员授权。检查覆盖未连接节点时开关 TUN、已连接时切换且保持同一 OpenVPN 进程、断开节点保持 TUN、系统 DNS 及出口 IP、网卡和 DNS 清理、v2rayN / Xray 与 10808 服务。GUI 验证可运行 `vpngate_proxy.exe --ui-smoke artifacts\tun-ui --tun-ui`，同样无需提升整个 GUI。

@@ -13,7 +13,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [IO.Compression.ZipFile]::OpenRead($zip.FullName)
 try {
     $names = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
-    foreach ($required in @('vpngate_proxy/vpngate_proxy.exe', 'vpngate_proxy/runtime/sing-box.exe', 'vpngate_proxy/runtime/wintun.dll')) {
+    foreach ($required in @('vpngate_proxy/vpngate_proxy.exe', 'vpngate_proxy/runtime/sing-box.exe', 'vpngate_proxy/runtime/wintun.dll', 'vpngate_proxy/runtime/geosite-cn.srs', 'vpngate_proxy/runtime/geoip-cn.srs')) {
         if ($names -notcontains $required) { throw "ZIP is missing required content: $required" }
     }
 } finally { $archive.Dispose() }

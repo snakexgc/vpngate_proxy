@@ -5,7 +5,7 @@
     <AssemblyName>vpngate_proxy</AssemblyName>
     <Product>vpngate_proxy</Product>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.2.4</Version>
+    <Version>1.3.0</Version>
     <Description>VPNGate OpenVPN through an upstream proxy, with local HTTP/SOCKS and Windows TUN.</Description>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="..\VPNGate.Core\VPNGate.Core.csproj" /></ItemGroup>

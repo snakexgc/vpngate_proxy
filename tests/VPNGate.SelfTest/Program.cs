@@ -20,7 +20,11 @@ void Throws(Action action, string name) { try { action(); } catch (ArgumentExcep
 
 try
 {
-    if (args.Contains("--ip-cache"))
+    if (args.Contains("--routing"))
+    {
+        await RoutingChecks.RunAsync(report, Check);
+    }
+    else if (args.Contains("--ip-cache"))
     {
         var root = Path.Combine(Path.GetTempPath(), "VPNGateXray-IpCacheTest-" + Guid.NewGuid().ToString("N"));
         try
@@ -250,7 +254,8 @@ try
         Check(nodes[0].SupportsTcp, "TCP capability detected");
         var config = CoreConfig.Serialize(CoreConfig.Build(nodes[0], new AppSettings(), "127.0.0.1", 10800));
         Check(!config.Contains("evil.exe") && !config.Contains("bad.dll"), "untrusted profile scripts and plugins cannot execute");
-        Check(!config.Contains("\"type\": \"direct\""), "local proxy mode has no direct-Internet fallback");
+        Check(CoreConfig.Build(nodes[0], new AppSettings(), "127.0.0.1", 10800)["route"]!["final"]!.GetValue<string>() == "vpn",
+            "unmatched rule-mode traffic has no direct-Internet fallback");
         var udp = profile.Replace("proto tcp", "proto udp");
         Throws(() => OpenVpnProfile.ToEndpoint(udp, ProxyEndpoint.Parse("http://localhost:8080"), 30), "HTTP upstream rejects UDP-only nodes");
         Check(OpenVpnProfile.ToEndpoint(udp, ProxyEndpoint.Parse("socks5://localhost:1080"), 30)["servers"]!.AsArray().Count == 1, "SOCKS5 can use UDP transport");

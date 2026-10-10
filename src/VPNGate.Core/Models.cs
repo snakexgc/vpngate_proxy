@@ -19,10 +19,15 @@ public sealed class AppSettings
     public int ProbeSamples { get; set; } = 3;
     public string ProbeUrl { get; set; } = "https://www.gstatic.com/generate_204";
     public string SelectedNodeId { get; set; } = "";
+    public string RoutingMode { get; set; } = "rule";
+    public bool AutoUpdateRules { get; set; } = true;
+    public int RuleUpdateHours { get; set; } = 24;
 
     public ProxyEndpoint Validate()
     {
         var proxy = ProxyEndpoint.Parse(UpstreamProxy, Username, Password);
+        RoutingModes.Validate(RoutingMode);
+        if (RuleUpdateHours is < 1 or > 168) throw new ArgumentException("规则更新间隔须在 1–168 小时之间。");
         if (!System.Net.IPAddress.TryParse(ListenAddress, out _))
             throw new ArgumentException("本地监听地址必须是有效的 IP 地址。");
         if (ListenPort is < 1 or > 65535) throw new ArgumentException("本地端口须在 1–65535 之间。");
