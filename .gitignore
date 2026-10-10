@@ -1,0 +1,13 @@
+.cache/
+**/bin/
+**/obj/
+dist/
+artifacts/
+*.user
+runtime/*.exe
+runtime/*.dll
+.vs/
+.idea/
+*.pdb
+*.log
+*.zip

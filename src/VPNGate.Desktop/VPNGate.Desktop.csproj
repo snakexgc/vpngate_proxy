@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>vpngate_proxy</AssemblyName>
+    <Product>vpngate_proxy</Product>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.2.3</Version>
+    <Description>VPNGate OpenVPN through an upstream proxy, with local HTTP/SOCKS and Windows TUN.</Description>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="..\VPNGate.Core\VPNGate.Core.csproj" /></ItemGroup>
+</Project>

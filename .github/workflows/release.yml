@@ -1,0 +1,46 @@
+name: Build and release ZIP
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zip-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Windows x64 portable ZIP
+    runs-on: windows-2025
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download verified runtime, build and package
+        run: ./scripts/build.ps1 -ProxyUrl ''
+
+      - name: Verify IP cache behavior
+        run: |
+          & './tests/VPNGate.SelfTest/bin/Release/net10.0-windows/VPNGate.SelfTest.exe' --ip-cache --output 'artifacts/ip-cache-tests.json'
+          if ($LASTEXITCODE -ne 0) { throw 'IP cache checks failed.' }
+
+      - name: Publish ZIP to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: ./scripts/publish-release.ps1
