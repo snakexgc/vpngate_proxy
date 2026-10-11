@@ -13,7 +13,6 @@ public sealed class AppSettings
     public string ProtectedPassword { get; set; } = "";
     public string ListenAddress { get; set; } = "127.0.0.1";
     public int ListenPort { get; set; } = 10800;
-    public int TestConcurrency { get; set; } = 4;
     public int ConnectionTimeoutSeconds { get; set; } = 30;
     public int ProbeTimeoutSeconds { get; set; } = 10;
     public int ProbeSamples { get; set; } = 3;
@@ -34,7 +33,6 @@ public sealed class AppSettings
         if (proxy.Port == ListenPort && (proxy.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
             System.Net.IPAddress.TryParse(proxy.Host, out var ip) && (System.Net.IPAddress.IsLoopback(ip) || proxy.Host == ListenAddress)))
             throw new ArgumentException("本地代理与上游代理不能使用同一个端口，否则会形成循环。");
-        if (TestConcurrency is < 1 or > 12) throw new ArgumentException("测速并发数须在 1–12 之间。");
         if (ConnectionTimeoutSeconds is < 5 or > 180) throw new ArgumentException("连接超时须在 5–180 秒之间。");
         if (ProbeTimeoutSeconds is < 2 or > 60) throw new ArgumentException("请求超时须在 2–60 秒之间。");
         if (ProbeSamples is < 1 or > 10) throw new ArgumentException("采样次数须在 1–10 之间。");
@@ -48,6 +46,10 @@ public sealed class AppSettings
 
 public sealed class VpnNode : INotifyPropertyChanged
 {
+    public VpnNode Copy()
+    {
+        var copy = (VpnNode)MemberwiseClone(); copy.PropertyChanged = null; copy._networkInfoLoading = false; return copy;
+    }
     public string Id { get; set; } = "";
     public string HostName { get; set; } = "";
     public string Ip { get; set; } = "";

@@ -30,8 +30,8 @@ public partial class MainWindow
             }
             await SelectMode(DirectModeButton, "direct");
             TunButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await _tunTask!;
-            if (_tunSession?.IsRunning != true || _session is not null) throw new IOException("Direct TUN requires no OpenVPN session.");
-            var worker = _tunSession.WorkerProcessId;
+            if (_session?.TunEnabled != true || _session?.IsVpnConnected == true) throw new IOException("Direct TUN requires no OpenVPN session.");
+            var worker = _session!.HostProcessId;
             async Task<bool> SystemRequest(string url, int timeout = 12)
             {
                 using var client = new HttpClient(new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromSeconds(timeout) }) { Timeout = TimeSpan.FromSeconds(timeout) };
@@ -46,10 +46,10 @@ public partial class MainWindow
             await SelectMode(GlobalModeButton, "global");
             if (await SystemRequest("http://1.1.1.1/cdn-cgi/trace", 3)) throw new IOException("Global traffic fell back to direct without OpenVPN.");
             checks["globalHasNoDirectFallback"] = true;
-            if (_tunSession.WorkerProcessId != worker || !_tunSession.IsRunning) throw new IOException("Switching modes restarted TUN.");
+            if (_session.HostProcessId != worker || !_session.TunEnabled) throw new IOException("Switching modes restarted TUN.");
             checks["modeChangesKeepTunRunning"] = true;
             await SelectMode(RuleModeButton, "rule");
-            await _tunSession.StopAsync(); UpdateControls();
+            await _session.SetTunEnabledAsync(false); UpdateControls();
             RulesExpander.IsExpanded = true;
             SettingsPanel.BringIntoView();
             SaveScreenshot(Path.Combine(directory, "routing-modes.png"));

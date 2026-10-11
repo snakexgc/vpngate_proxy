@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 using VPNGate.Core;
 
 if (args is ["--engine-host", var core, var hostConfig]) return await EngineHost.RunAsync(core, hostConfig);
-if (args is ["--tun-worker", var pipeName]) return await TunWorker.RunAsync(pipeName);
+if (args is ["--core-worker", var pipeName]) return await CoreWorker.RunAsync(pipeName);
 if (args is ["--dns-guard", var pid, var ticks, var identity]) return await SystemDnsLease.GuardAsync(int.Parse(pid), long.Parse(ticks), identity);
 
 var outputIndex = Array.IndexOf(args, "--output");
@@ -20,7 +20,11 @@ void Throws(Action action, string name) { try { action(); } catch (ArgumentExcep
 
 try
 {
-    if (args.Contains("--routing"))
+    if (args.Contains("--pool"))
+    {
+        await NodePoolChecks.RunAsync(report, Check);
+    }
+    else if (args.Contains("--routing"))
     {
         await RoutingChecks.RunAsync(report, Check);
     }
@@ -83,91 +87,9 @@ try
         report["residentialInferred"] = nodes.Count(n => n.NetworkInfo?.Hosting == false);
         report["unknown"] = nodes.Count(n => n.NetworkInfo?.Hosting is null);
     }
-    else if (args.Contains("--tun-only"))
+    else if (args.Contains("--unified") || args.Contains("--tun") || args.Contains("--tun-only"))
     {
-        var settings = new AppSettings { ListenPort = EngineRuntime.FreePort() };
-        await using var tunOnly = new TunSession();
-        tunOnly.Log += Console.WriteLine;
-        await tunOnly.StartAsync(settings, CancellationToken.None);
-        Check(tunOnly.IsRunning && !await Listening(settings.ListenPort), "standalone TUN starts without OpenVPN");
-    }
-    else if (args.Contains("--tun"))
-    {
-        var settings = new AppSettings { ConnectionTimeoutSeconds = 25, ListenPort = EngineRuntime.FreePort() };
-        var nodes = await new VpnGateClient().FetchAsync(settings, CancellationToken.None);
-        var v2ray = Process.GetProcessesByName("v2rayN").Select(p => p.Id).ToArray();
-        var xray = Process.GetProcessesByName("xray").Select(p => p.Id).ToArray();
-        var before = System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces().Select(n => n.Name).ToArray();
-        var beforeDnsRules = await SystemDnsLease.OwnedRuleCountAsync();
-        var coreLogs = new List<string>();
-        report["coreLogs"] = coreLogs;
-        var candidates = await ProbeService.TestManyAsync(nodes.Where(n => n.SupportsTcp && !n.HostName.StartsWith("public-vpn-", StringComparison.Ordinal)).Take(8).ToArray(), settings, null, null, null, CancellationToken.None);
-        await using (var beforeConnection = new TunSession())
-        {
-            beforeConnection.Log += line => { lock (coreLogs) coreLogs.Add(line); };
-            await beforeConnection.StartAsync(settings, CancellationToken.None);
-            Check(beforeConnection.IsRunning && !await Listening(settings.ListenPort), "TUN can start without any OpenVPN connection");
-            Check(System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces().Any(n => n.Name == CoreConfig.TunName), "independent TUN creates a real adapter");
-        }
-        Check(!System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces().Any(n => n.Name == CoreConfig.TunName), "TUN can stop without any OpenVPN connection");
-        await using var tun = new TunSession();
-        tun.Log += line => { lock (coreLogs) coreLogs.Add(line); Console.WriteLine(line); };
-        await tun.StartAsync(settings, CancellationToken.None);
-        EngineSession? connected = null;
-        foreach (var usable in nodes.Where(n => candidates.Any(r => r.Success && r.NodeId == n.Id)))
-        {
-            var attempt = new EngineSession();
-            attempt.Log += line => { lock (coreLogs) coreLogs.Add(line); Console.WriteLine(line); };
-            try { await attempt.StartAsync(usable, settings, "127.0.0.1", settings.ListenPort, CancellationToken.None); connected = attempt; break; }
-            catch (Exception exception) { Console.WriteLine($"Node {usable.Ip}: {exception.Message}"); await attempt.DisposeAsync(); }
-        }
-        if (connected is null) throw new IOException("No current VPNGate node accepted the TUN test connection.");
-        await using (var session = connected)
-        {
-            var samples = await ProbeService.MeasureAsync(session.Port, settings, CancellationToken.None);
-            report["proxyLatencyMs"] = ProbeService.Median(samples);
-            Check(System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces().Any(n => n.Name == CoreConfig.TunName), "VPNGate-TUN adapter created");
-            var proxyExit = await ProbeService.ExitIpAsync(session.Port, CancellationToken.None);
-            NativeDns.Flush();
-            var freshDns = await Dns.GetHostAddressesAsync("www.cloudflare.com");
-            Check(freshDns.Length > 0, "fresh system DNS lookup works during TUN coexistence");
-            report["systemDnsUsesLocalListener"] = coreLogs.Any(l => l.Contains("inbound/direct[system-dns]: inbound", StringComparison.Ordinal));
-            Check(report["systemDnsUsesLocalListener"] is true, "system DNS goes through the OpenVPN DNS listener");
-            if (args.Contains("--crash"))
-            {
-                report["crashStarted"] = true;
-                report["hostProcessId"] = session.HostProcessId!; report["tunWorkerProcessId"] = tun.WorkerProcessId!;
-                if (outputPath is null) throw new ArgumentException("Crash check requires --output.");
-                Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-                await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
-                Process.GetCurrentProcess().Kill();
-                await Task.Delay(Timeout.Infinite);
-            }
-            using var direct = new HttpClient(new SocketsHttpHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(20) };
-            var trace = await direct.GetStringAsync("https://www.cloudflare.com/cdn-cgi/trace");
-            var directExit = trace.Split('\n').First(l => l.StartsWith("ip="))[3..];
-            report["proxyExit"] = proxyExit; report["tunExit"] = directExit;
-            Check(proxyExit == directExit, "system traffic exits through the same OpenVPN node");
-            using var upstream = new HttpClient(new SocketsHttpHandler { Proxy = new AppSettings().Validate().ToWebProxy(), UseProxy = true }) { Timeout = TimeSpan.FromSeconds(15) };
-            Check((await upstream.GetAsync("https://www.gstatic.com/generate_204")).StatusCode == HttpStatusCode.NoContent, "existing 10808 upstream remains usable during TUN");
-            Check(v2ray.SequenceEqual(Process.GetProcessesByName("v2rayN").Select(p => p.Id)), "v2rayN remains running");
-            Check(xray.SequenceEqual(Process.GetProcessesByName("xray").Select(p => p.Id)), "existing Xray remains running");
-            var vpnPid = session.HostProcessId;
-            await tun.StopAsync();
-            Check(session.IsRunning && session.HostProcessId == vpnPid, "disabling TUN preserves the same OpenVPN process");
-            Check((await ProbeService.MeasureAsync(session.Port, settings, CancellationToken.None)).Count == settings.ProbeSamples, "local proxy still works after TUN is disabled");
-            var workerPid = tun.WorkerProcessId;
-            await tun.StartAsync(settings, CancellationToken.None);
-                Check(session.IsRunning && session.HostProcessId == vpnPid, "enabling TUN on a connected node does not reconnect OpenVPN");
-                Check(tun.WorkerProcessId == workerPid, "TUN toggles reuse the authorized worker");
-                await session.DisposeAsync();
-                Check(tun.IsRunning, "disconnecting OpenVPN leaves TUN running");
-            await tun.StopAsync();
-        }
-        await Task.Delay(1000);
-        Check(!System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces().Any(n => n.Name == CoreConfig.TunName), "TUN adapter removed after disconnect");
-        Check(before.All(n => System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces().Any(current => current.Name == n)), "all pre-existing adapters preserved");
-        Check(await SystemDnsLease.OwnedRuleCountAsync() == beforeDnsRules, "temporary DNS policy removed after disconnect");
+        await UnifiedChecks.RunAsync(args.Contains("--tun") || args.Contains("--tun-only"), report, Check);
     }
     else if (args.Contains("--live"))
     {
@@ -260,9 +182,9 @@ try
         Throws(() => OpenVpnProfile.ToEndpoint(udp, ProxyEndpoint.Parse("http://localhost:8080"), 30), "HTTP upstream rejects UDP-only nodes");
         Check(OpenVpnProfile.ToEndpoint(udp, ProxyEndpoint.Parse("socks5://localhost:1080"), 30)["servers"]!.AsArray().Count == 1, "SOCKS5 can use UDP transport");
         Check(ProbeService.Median([100, 4, 2]) == 4 && ProbeService.Median([2, 8, 4, 6]) == 5, "latency median ignores sample order");
-        var tun = CoreConfig.BuildTun(new AppSettings(), "Ethernet");
-        Check(!tun.ContainsKey("endpoints") && tun["route"]!["final"]!.GetValue<string>() == "vpn-local", "independent TUN requires no OpenVPN node and only uses the local VPN proxy");
-        Check(tun["outbounds"]![0]!["server_port"]!.GetValue<int>() == 10800, "TUN bridges to the configured local proxy");
+        var tun = CoreConfig.Build(nodes[0], new AppSettings(), "127.0.0.1", 10800, tunEnabled: true, physicalInterface: "Ethernet");
+        Check(tun["endpoints"]!.AsArray().Count == 1 && tun["route"]!["final"]!.GetValue<string>() == "vpn", "TUN and the OpenVPN endpoint share one native core configuration");
+        Check(!CoreConfig.Serialize(tun).Contains("vpn-local"), "unified TUN has no local SOCKS relay hop");
         Check(tun["route"]!["rules"]!.AsArray().Any(r => r!["process_name"] is { } names && names.AsArray().Any(p => p!.GetValue<string>() == "xray.exe")), "TUN prevents upstream Xray routing recursion");
         Check(tun["outbounds"]![1]!["bind_interface"]!.GetValue<string>() == "Ethernet", "upstream bypass binds to physical interface");
         var physicalName = CoreConfig.PhysicalInterface();

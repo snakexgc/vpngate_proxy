@@ -38,7 +38,7 @@
                 <StackPanel>
                   <TextBlock Text="HTTPS 测试地址" Style="{StaticResource FieldLabel}" /><TextBox x:Name="ProbeUrlBox" FontSize="11" />
                   <Grid><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="10" /><ColumnDefinition /></Grid.ColumnDefinitions>
-                    <StackPanel><TextBlock Text="并发数" Style="{StaticResource FieldLabel}" /><TextBox x:Name="ConcurrencyBox" /></StackPanel>
+                    <StackPanel><TextBlock Text="自动测试并发" Style="{StaticResource FieldLabel}" /><TextBlock Text="每 30 个节点 1 路，最多 20 路" TextWrapping="Wrap" FontSize="10" Margin="0,8,0,0" /></StackPanel>
                     <StackPanel Grid.Column="2"><TextBlock Text="连接超时（秒）" Style="{StaticResource FieldLabel}" /><TextBox x:Name="TimeoutBox" /></StackPanel>
                   </Grid>
                   <TextBlock Text="实际建立 OpenVPN 连接后测量 HTTPS 请求延时，取 3 次采样的中位数。" TextWrapping="Wrap" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,10,0,0" />
@@ -88,8 +88,8 @@
         <Border Grid.Row="2" Style="{StaticResource Card}" Padding="0">
           <Grid><Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <Grid Margin="18,15,18,11"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-              <StackPanel Orientation="Horizontal"><TextBlock Text="VPNGate 节点" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" /><TextBlock x:Name="NodeCountText" Text="0 个节点" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,0,0,0" /></StackPanel>
-              <Button x:Name="FetchButton" Grid.Column="1" Content="获取 / 刷新节点" Click="Fetch_Click" />
+              <StackPanel Orientation="Horizontal"><TextBlock Text="可用节点池" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" /><TextBlock x:Name="NodeCountText" Text="0 个可用节点" Foreground="{StaticResource Muted}" VerticalAlignment="Center" Margin="12,0,0,0" /></StackPanel>
+              <Button x:Name="FetchButton" Grid.Column="1" Content="立即刷新节点池" Click="Fetch_Click" />
             </Grid>
             <Grid Grid.Row="1" Margin="18,0,18,12"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="12" /><ColumnDefinition Width="142" /><ColumnDefinition Width="12" /><ColumnDefinition Width="132" /></Grid.ColumnDefinitions>
               <TextBox x:Name="SearchBox" TextChanged="Filter_Changed" ToolTip="搜索国家、IP 或节点名称" VerticalContentAlignment="Center" />
@@ -117,11 +117,11 @@
                 <Button x:Name="ConnectButton" Content="连接选中节点" Style="{StaticResource PrimaryButton}" Click="Connect_Click" />
                 <Button x:Name="DisconnectButton" Grid.Column="1" Content="断开" Margin="8,0,0,0" Click="Disconnect_Click" IsEnabled="False" />
                 <Button x:Name="TestSelectedButton" Grid.Column="3" Content="测选中" Click="TestSelected_Click" />
-                <Button x:Name="TestAllButton" Grid.Column="4" Content="测全部" Margin="8,0,0,0" Click="TestAll_Click" />
+                <Button x:Name="TestAllButton" Grid.Column="4" Content="复测节点池" Margin="8,0,0,0" Click="TestAll_Click" />
                 <Button x:Name="CancelTestsButton" Grid.Column="5" Content="取消" Margin="8,0,0,0" Click="CancelTests_Click" IsEnabled="False" />
               </Grid>
               <Grid Margin="0,11,0,0"><Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="190" /></Grid.ColumnDefinitions>
-                <TextBlock x:Name="ProgressText" Text="获取节点后可连接。Ctrl / Shift 可多选测速；双击节点可切换。" Foreground="{StaticResource Muted}" FontSize="10" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                <TextBlock x:Name="ProgressText" Text="每小时自动获取并验证；只保留可用节点。双击可切换。" Foreground="{StaticResource Muted}" FontSize="10" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                 <ProgressBar x:Name="TestProgress" Grid.Column="1" Height="4" VerticalAlignment="Center" Minimum="0" Maximum="100" Value="0" Foreground="{StaticResource Accent}" Background="#E7EEF9" Margin="10,0,0,0" BorderThickness="0" />
               </Grid>
             </StackPanel></Border>

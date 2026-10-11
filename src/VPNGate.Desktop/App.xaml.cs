@@ -12,10 +12,10 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        if (e.Args is ["--tun-worker", var pipeName])
+        if (e.Args is ["--core-worker", var pipeName])
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            Shutdown(await Task.Run(() => TunWorker.RunAsync(pipeName))); return;
+            Shutdown(await Task.Run(() => CoreWorker.RunAsync(pipeName))); return;
         }
         if (e.Args is ["--dns-guard", var pid, var ticks, var identity])
         {

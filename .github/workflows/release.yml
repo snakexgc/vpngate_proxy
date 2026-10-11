@@ -47,6 +47,13 @@ jobs:
           & './tests/VPNGate.SelfTest/bin/Release/net10.0-windows/VPNGate.SelfTest.exe' --routing --output 'artifacts/routing-tests.json'
           if ($LASTEXITCODE -ne 0) { throw 'Routing checks failed.' }
 
+      - name: Verify node pool and unified core
+        run: |
+          & './tests/VPNGate.SelfTest/bin/Release/net10.0-windows/VPNGate.SelfTest.exe' --pool --output 'artifacts/pool-tests.json'
+          if ($LASTEXITCODE -ne 0) { throw 'Node pool checks failed.' }
+          & './tests/VPNGate.SelfTest/bin/Release/net10.0-windows/VPNGate.SelfTest.exe' --unified --output 'artifacts/unified-tests.json'
+          if ($LASTEXITCODE -ne 0) { throw 'Unified core checks failed.' }
+
       - name: Publish ZIP to GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}

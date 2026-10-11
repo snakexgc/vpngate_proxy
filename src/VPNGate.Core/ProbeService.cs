@@ -65,9 +65,10 @@ public static class ProbeService
         Action<VpnNode, string>? status, Action<ProbeResult, int, int>? progress, Action<string>? log, CancellationToken cancellationToken)
     {
         settings.Validate();
+        if (nodes.Count == 0) return [];
         var results = new ProbeResult[nodes.Count];
         var completed = 0;
-        await Parallel.ForEachAsync(Enumerable.Range(0, nodes.Count), new ParallelOptions { MaxDegreeOfParallelism = settings.TestConcurrency }, async (i, _) =>
+        await Parallel.ForEachAsync(Enumerable.Range(0, nodes.Count), new ParallelOptions { MaxDegreeOfParallelism = NodePoolPolicy.Concurrency(nodes.Count) }, async (i, _) =>
         {
             if (cancellationToken.IsCancellationRequested) return;
             status?.Invoke(nodes[i], "连接中");

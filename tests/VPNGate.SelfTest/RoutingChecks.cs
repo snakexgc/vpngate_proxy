@@ -67,7 +67,11 @@ internal static class RoutingChecks
         using var recorder = new SocksRecorder();
         settings.ListenPort = recorder.Port;
         var localPort = EngineRuntime.FreePort(); var control = RoutingControl.Create(localPort, recorder.Port);
-        var config = CoreConfig.BuildTun(settings, "Ethernet", control);
+        var profile = "client\ndev tun\nproto tcp\nremote 198.51.100.1 443\n<ca>\n-----BEGIN CERTIFICATE-----\nplaceholder\n-----END CERTIFICATE-----\n</ca>\n";
+        var config = CoreConfig.Build(new VpnNode { OpenVpnConfig = profile }, settings, "127.0.0.1", localPort, control);
+        config["endpoints"] = new JsonArray();
+        config["outbounds"] = new JsonArray(new JsonObject { ["type"] = "socks", ["tag"] = "vpn", ["server"] = "127.0.0.1", ["server_port"] = recorder.Port, ["version"] = "5" },
+            new JsonObject { ["type"] = "direct", ["tag"] = "physical", ["domain_resolver"] = "direct-dns" });
         config["inbounds"] = new JsonArray(new JsonObject { ["type"] = "mixed", ["tag"] = "local", ["listen"] = "127.0.0.1", ["listen_port"] = localPort });
         config["outbounds"]![1]!.AsObject().Remove("bind_interface");
         foreach (var server in config["dns"]!["servers"]!.AsArray()) server!.AsObject().Remove("bind_interface");

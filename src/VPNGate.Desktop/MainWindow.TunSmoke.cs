@@ -49,18 +49,18 @@ public partial class MainWindow
                 int? worker = null;
                 for (var cycle = 0; cycle < 3; cycle++)
                 {
-                    if (_session is not null || !TunButton.IsEnabled) throw new IOException("Standalone TUN button is unavailable.");
+                    if (_session?.IsVpnConnected == true || !TunButton.IsEnabled) throw new IOException("Standalone TUN button is unavailable.");
                     TunButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     await _tunTask!;
-                    if (_tunSession?.IsRunning != true || _session is not null || !TunButton.IsEnabled)
+                    if (_session?.TunEnabled != true || _session?.IsVpnConnected == true || !TunButton.IsEnabled)
                         throw new IOException("TUN did not start without an OpenVPN node.");
-                    worker ??= _tunSession.WorkerProcessId;
-                    if (_tunSession.WorkerProcessId != worker) throw new IOException("The authorized TUN worker was not reused.");
+                    worker ??= _session!.HostProcessId;
+                    if (_session!.HostProcessId != worker) throw new IOException("The authorized TUN worker was not reused.");
                     await Task.Delay(3000);
                     if (cycle == 0) SaveScreenshot(Path.Combine(directory, "tun-without-openvpn.png"));
                     TunButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     await _tunTask!;
-                    if (_tunSession.IsRunning || !TunButton.IsEnabled) throw new IOException("Standalone TUN did not stop.");
+                    if (_session.TunEnabled || !TunButton.IsEnabled) throw new IOException("Standalone TUN did not stop.");
                 }
                 await StopTunAsync(dispose: true);
                 if (System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces().Any(n => n.Name == CoreConfig.TunName))

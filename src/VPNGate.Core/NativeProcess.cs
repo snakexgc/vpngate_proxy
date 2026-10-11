@@ -71,6 +71,7 @@ public static class EngineHost
                 StandardErrorEncoding = Encoding.UTF8, WorkingDirectory = Path.GetDirectoryName(core)! };
             start.ArgumentList.Add("run"); start.ArgumentList.Add("--disable-color"); start.ArgumentList.Add("-c"); start.ArgumentList.Add(config);
             using var process = Process.Start(start) ?? throw new IOException("内核启动失败。");
+            await output.WriteLineAsync($"CORE_PID:{process.Id}");
             using var coreJob = new ProcessJob();
             coreJob.Add(process);
             var outputGate = new SemaphoreSlim(1, 1);
@@ -78,9 +79,9 @@ public static class EngineHost
             {
                 while (await reader.ReadLineAsync() is { } line)
                 {
-                    if (dnsLease is not null && line.Contains("sing-box started", StringComparison.Ordinal))
+                    if (line.Contains("sing-box started", StringComparison.Ordinal))
                     {
-                        try { await dnsLease.ActivateAsync(); line += "\nTUN_READY"; }
+                        try { if (dnsLease is not null) await dnsLease.ActivateAsync(); line += "\nCORE_READY"; }
                         catch (Exception exception) { line = $"HOST_ERROR: 无法为 TUN 配置临时 DNS 策略：{exception.Message}"; }
                     }
                     await outputGate.WaitAsync(); try { await output.WriteLineAsync(line); } finally { outputGate.Release(); }

@@ -51,6 +51,8 @@ public sealed class AppDataStore
     }
     public IReadOnlyList<VpnNode> LoadNodes() => Read<List<VpnNode>>("nodes.json") ?? [];
     public void SaveNodes(IEnumerable<VpnNode> nodes) => Write("nodes.json", nodes.ToList());
+    public DateTimeOffset? LoadPoolRefresh() => Read<DateTimeOffset?>("node-pool-refresh.json");
+    public void SavePoolRefresh(DateTimeOffset refresh) => Write("node-pool-refresh.json", refresh);
     public Dictionary<string, IpNetworkInfo> LoadIpNetworkCache() => Read<Dictionary<string, IpNetworkInfo>>("ip-network-cache.json") ?? [];
     public void SaveIpNetworkCache(Dictionary<string, IpNetworkInfo> cache) => Write("ip-network-cache.json", cache);
     public DateTimeOffset LoadIpApiNextRequest() => Read<DateTimeOffset>("ip-api-next-request.json");

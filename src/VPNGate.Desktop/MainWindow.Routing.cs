@@ -27,12 +27,10 @@ public partial class MainWindow
         var previous = _settings.RoutingMode;
         if (previous == mode) return;
         var vpn = _session?.IsRunning == true ? _session : null;
-        var tun = _tunSession?.IsRunning == true ? _tunSession : null;
         _routingBusy = true; UpdateControls();
         try
         {
             if (vpn is not null) await vpn.SetRoutingModeAsync(mode, _rulesCts.Token);
-            if (tun is not null) await tun.SetRoutingModeAsync(mode, _rulesCts.Token);
             var settings = _settings.Copy(); settings.RoutingMode = mode;
             _store.SaveSettings(settings); _settings = settings;
             Log($"已切换为{RoutingModes.Label(mode)}模式，本地代理与 TUN 使用同一分流策略，OpenVPN 连接保持运行。");
@@ -40,8 +38,7 @@ public partial class MainWindow
         catch (Exception exception)
         {
             foreach (var rollback in new Func<Task>[] {
-                () => vpn is null ? Task.CompletedTask : vpn.SetRoutingModeAsync(previous),
-                () => tun is null ? Task.CompletedTask : tun.SetRoutingModeAsync(previous) })
+                () => vpn is null ? Task.CompletedTask : vpn.SetRoutingModeAsync(previous) })
                 try { await rollback(); } catch (Exception error) { Log("恢复分流模式：" + error.Message); }
             SetRoutingModeUi(previous);
             if (!_closing) ShowError("切换分流模式失败：" + exception.Message);

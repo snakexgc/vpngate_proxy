@@ -34,11 +34,12 @@ public partial class MainWindow : Window
     private long _displayedLogVersion;
     private readonly string _logPath;
     private EngineSession? _session;
-    private TunSession? _tunSession;
+    private bool _tunRequested;
+    private readonly NodePool _pool;
     private CancellationTokenSource? _tunCts;
     private Task? _tunTask;
     private bool _tunBusy, _tunStopping;
-    private CancellationTokenSource? _connectCts, _testCts, _fetchCts;
+    private CancellationTokenSource? _connectCts;
     private Task? _connectTask, _testTask, _fetchTask;
     private bool _loaded, _connectionBusy, _testing, _fetching, _closing, _canClose;
     private DateTimeOffset? _connectedAt;
@@ -56,6 +57,7 @@ public partial class MainWindow : Window
         _view.Filter = Filter;
         NodeGrid.ItemsSource = _view;
         _settings = _store.LoadSettings();
+        _pool = new NodePool(_store.LoadNodes(), _store.LoadPoolRefresh(), probe: ProbePooledNodeAsync);
         FillSettings(_settings);
         Directory.CreateDirectory(AppDataPaths.Logs);
         _logPath = Path.Combine(AppDataPaths.Logs, $"session-{DateTime.Now:yyyyMMdd-HHmmss}-{Environment.ProcessId}.log");
@@ -77,7 +79,7 @@ public partial class MainWindow : Window
     {
         if (_loaded) return;
         _loaded = true;
-        foreach (var node in _store.LoadNodes()) _nodes.Add(node);
+        foreach (var node in _pool.Nodes) _nodes.Add(node);
         _ipInfo.ApplyCached(_nodes);
         UpdateCountries(); ApplySort();
         NodeGrid.SelectedItem = _nodes.FirstOrDefault(n => n.Id == _settings.SelectedNodeId) ?? _view.Cast<VpnNode>().FirstOrDefault();
@@ -112,6 +114,12 @@ public partial class MainWindow : Window
             await RunRoutingSmokeAsync(index >= 0 && index + 1 < _arguments.Length ? _arguments[index + 1] : Path.Combine(AppDataPaths.Root, "routing-smoke"));
             return;
         }
+        if (_arguments.Contains("--pool-ui", StringComparer.Ordinal))
+        {
+            var index = Array.IndexOf(_arguments, "--ui-smoke");
+            await RunPoolSmokeAsync(index >= 0 && index + 1 < _arguments.Length ? _arguments[index + 1] : Path.Combine(AppDataPaths.Root, "pool-smoke"));
+            return;
+        }
         _ipInfoTask = RefreshNodeTypesAsync(_nodes.ToArray(), _settings);
         var smoke = Array.IndexOf(_arguments, "--ui-smoke");
         if (smoke >= 0)
@@ -119,6 +127,10 @@ public partial class MainWindow : Window
             await RunUiSmokeAsync(smoke + 1 < _arguments.Length ? _arguments[smoke + 1] : Path.Combine(AppDataPaths.Root, "ui-smoke"));
             return;
         }
+        var startup = EnsureCoreAsync(_settings, _poolCts.Token);
+        _poolLoopTask = RunPoolLoopAsync();
+        try { await startup; }
+        catch (Exception error) { Log("主核心启动失败：" + error.Message); FooterText.Text = "本地核心启动失败，节点池后台维护继续运行。"; }
         if (_arguments.Contains("--connect", StringComparer.Ordinal))
         {
             if (_nodes.Count == 0) { _fetchTask = FetchNodesAsync(); await _fetchTask; }
@@ -130,7 +142,7 @@ public partial class MainWindow : Window
     {
         UpstreamBox.Text = settings.UpstreamProxy; UsernameBox.Text = settings.Username; PasswordBox.Password = settings.Password;
         ListenBox.Text = settings.ListenAddress; PortBox.Text = settings.ListenPort.ToString(CultureInfo.InvariantCulture);
-        ConcurrencyBox.Text = settings.TestConcurrency.ToString(CultureInfo.InvariantCulture); TimeoutBox.Text = settings.ConnectionTimeoutSeconds.ToString(CultureInfo.InvariantCulture);
+        TimeoutBox.Text = settings.ConnectionTimeoutSeconds.ToString(CultureInfo.InvariantCulture);
         ProbeUrlBox.Text = settings.ProbeUrl;
         SetRoutingModeUi(settings.RoutingMode);
         AutoRulesBox.IsChecked = settings.AutoUpdateRules; RuleHoursBox.Text = settings.RuleUpdateHours.ToString(CultureInfo.InvariantCulture);
@@ -141,7 +153,7 @@ public partial class MainWindow : Window
         var settings = _settings.Copy();
         settings.UpstreamProxy = UpstreamBox.Text.Trim(); settings.Username = UsernameBox.Text; settings.Password = PasswordBox.Password;
         settings.ListenAddress = ListenBox.Text.Trim(); settings.ListenPort = Number(PortBox, "本地端口");
-        settings.TestConcurrency = Number(ConcurrencyBox, "并发数"); settings.ConnectionTimeoutSeconds = Number(TimeoutBox, "连接超时");
+        settings.ConnectionTimeoutSeconds = Number(TimeoutBox, "连接超时");
         settings.ProbeUrl = ProbeUrlBox.Text.Trim(); settings.SelectedNodeId = (NodeGrid.SelectedItem as VpnNode)?.Id ?? "";
         settings.RoutingMode = DirectModeButton.IsChecked == true ? "direct" : GlobalModeButton.IsChecked == true ? "global" : "rule";
         settings.AutoUpdateRules = AutoRulesBox.IsChecked == true; settings.RuleUpdateHours = Number(RuleHoursBox, "规则更新间隔");
@@ -153,39 +165,21 @@ public partial class MainWindow : Window
         try { settings = ReadSettings(); _store.SaveSettings(settings); _settings = settings; return true; }
         catch (Exception exception) { settings = _settings; ShowError(exception.Message); return false; }
     }
-    private void Save_Click(object sender, RoutedEventArgs e)
+    private async void Save_Click(object sender, RoutedEventArgs e)
     {
-        if (TrySaveSettings(out var settings)) { FillSettings(settings); Log("设置已保存。代理密码由 Windows DPAPI 加密保存。"); FooterText.Text = "设置已保存"; }
-    }
-    private void Fetch_Click(object sender, RoutedEventArgs e) => _fetchTask = FetchNodesAsync();
-    private async Task FetchNodesAsync()
-    {
-        if (_fetching || _testing || _closing || !TrySaveSettings(out var settings)) return;
-        _fetching = true; _fetchCts = new(); UpdateControls();
-        FooterText.Text = "正在通过上游代理获取 VPNGate 节点…";
-        try
+        if (TrySaveSettings(out var settings))
         {
-            var nodes = await new VpnGateClient().FetchAsync(settings, _fetchCts.Token);
-            var old = _nodes.ToDictionary(n => n.Id);
-            var selectedId = (NodeGrid.SelectedItem as VpnNode)?.Id ?? settings.SelectedNodeId;
-            _nodes.Clear();
-            foreach (var node in nodes)
+            try
             {
-                if (old.TryGetValue(node.Id, out var previous) && previous.OpenVpnConfig == node.OpenVpnConfig)
-                { node.LatencyMs = previous.LatencyMs; node.ConnectMs = previous.ConnectMs; node.TestStatus = previous.TestStatus; node.Error = previous.Error; node.TestedAt = previous.TestedAt; }
-                _nodes.Add(node);
+                if (_session?.IsRunning == true && !_session.IsVpnConnected && !_session.TunEnabled)
+                    await _session.ConfigureAsync(null, settings, settings.ListenAddress, settings.ListenPort, false, _poolCts.Token);
+                FillSettings(settings); Log("设置已保存并应用于主核心。代理密码由 Windows DPAPI 加密保存。"); FooterText.Text = "设置已保存";
             }
-            _store.SaveNodes(_nodes); UpdateCountries(); ApplySort();
-            _ipInfoCts?.Cancel();
-            _ipInfoTask = RefreshNodeTypesAsync(_nodes.ToArray(), settings);
-            NodeGrid.SelectedItem = _nodes.FirstOrDefault(n => n.Id == selectedId) ?? _view.Cast<VpnNode>().FirstOrDefault();
-            Log($"已获取 {nodes.Count} 个节点，覆盖 {nodes.Select(n => n.CountryShort).Distinct().Count()} 个国家 / 地区。");
-            FooterText.Text = $"节点更新于 {DateTime.Now:HH:mm:ss} · 来自 VPNGate 官方 HTTPS 接口";
+            catch (Exception error) { ShowError("应用设置失败：" + error.Message); }
         }
-        catch (OperationCanceledException) when (_fetchCts.IsCancellationRequested) { Log("节点获取已取消。"); }
-        catch (Exception exception) { ShowError($"获取节点失败：{exception.Message}，已保留缓存列表。"); }
-        finally { _fetching = false; _fetchCts.Dispose(); _fetchCts = null; UpdateControls(); }
     }
+    private void Fetch_Click(object sender, RoutedEventArgs e) { if (SettingsPanel.IsEnabled && !TrySaveSettings(out _)) return; _fetchTask = RefreshPoolAsync(true); }
+    private Task FetchNodesAsync() => RefreshPoolAsync(true);
 
     private async Task RefreshNodeTypesAsync(IReadOnlyList<VpnNode> nodes, AppSettings settings)
     {
@@ -214,171 +208,6 @@ public partial class MainWindow : Window
             if (_ipInfoCts == cancel) _ipInfoCts = null;
         }
     }
-
-    private void Connect_Click(object sender, RoutedEventArgs e) => _connectTask = ConnectSelectedAsync();
-    private async Task ConnectSelectedAsync()
-    {
-        if (_connectionBusy || _closing || NodeGrid.SelectedItem is not VpnNode node || !TrySaveSettings(out var settings)) return;
-        _connectionBusy = true; _connectCts = new();
-        await DisconnectSessionAsync();
-        SetStatus("正在连接", "#FFF4DC", "#E5A52E");
-        ConnectedNodeText.Text = node.Ip; ConnectedCountryText.Text = $"{node.CountryLabel} · {node.HostName}";
-        UpdateControls();
-        var session = new EngineSession();
-        _session = session;
-        session.Log += line => Log(line);
-        session.Failed += error => Dispatcher.BeginInvoke(async () =>
-        {
-            if (_session != session || _closing) return;
-            Log(error);
-            if (_connectionBusy) { _connectCts?.Cancel(); return; }
-            await DisconnectSessionAsync(); SetStatus("连接中断", "#FFF0EE", "#DF6655"); UpdateControls();
-        });
-        try
-        {
-            var watch = Stopwatch.StartNew();
-            await session.StartAsync(node, settings, settings.ListenAddress, settings.ListenPort, _connectCts.Token);
-            var connectMs = watch.Elapsed.TotalMilliseconds;
-            var samples = await ProbeService.MeasureAsync(session.ProbePort, settings, _connectCts.Token);
-            node.Apply(new(node.Id, true, ProbeService.Median(samples), connectMs, "", DateTimeOffset.Now, Samples: samples));
-            _connectedAt = DateTimeOffset.Now;
-            LatencyText.Text = node.LatencyText; LocalProxyText.Text = $"{settings.ListenAddress}:{settings.ListenPort}";
-            UpdateTunControls();
-            SetStatus("已连接", "#EAF8F0", "#25A76E");
-            Log($"已连接 {node.CountryDisplay} {node.Ip}，实际网络延时 {node.LatencyText}，本地端口 {settings.ListenPort}。");
-            ProgressText.Text = $"已连接 {node.HostName} · {node.CountryLabel}";
-            FooterText.Text = $"已连接 · {node.CountryLabel} · {node.Ip} · 本地端口 {settings.ListenPort}";
-            try { ExitIpText.Text = "节点出口 IP：" + await ProbeService.ExitIpAsync(session.ProbePort, _connectCts.Token); }
-            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException) { Log($"出口 IP 查询暂不可用：{exception.Message}"); }
-            _store.SaveNodes(_nodes);
-        }
-        catch (OperationCanceledException) when (_connectCts.IsCancellationRequested)
-        { await DisconnectSessionAsync(); SetStatus("已取消", "#EFF3F8", "#8A98AB"); Log("连接已取消。"); }
-        catch (Exception exception)
-        {
-            node.Apply(new(node.Id, false, null, null, exception.Message, DateTimeOffset.Now));
-            await DisconnectSessionAsync(); SetStatus("连接失败", "#FFF0EE", "#DF6655"); ShowError(exception.Message);
-        }
-        finally { _connectionBusy = false; _connectCts.Dispose(); _connectCts = null; ApplySort(); UpdateControls(); }
-    }
-    private async void Disconnect_Click(object sender, RoutedEventArgs e)
-    {
-        _connectCts?.Cancel();
-        if (_connectionBusy && _connectTask is not null) await _connectTask;
-        await DisconnectSessionAsync(); SetStatus("未连接", "#EFF3F8", "#8A98AB"); UpdateControls();
-        Log(_tunSession?.IsRunning == true ? "OpenVPN 已断开；TUN 保持开启，等待节点连接。" : "OpenVPN 已断开，已停止本地代理。");
-    }
-    private async Task DisconnectSessionAsync()
-    {
-        var session = _session; _session = null;
-        if (session is not null) await session.DisposeAsync();
-        _connectedAt = null; LatencyText.Text = "—"; ExitIpText.Text = "节点出口 IP：—"; ConnectedNodeText.Text = "等待连接";
-        ConnectedCountryText.Text = "从下方列表选择一个节点"; UpdateTunControls();
-    }
-
-    private void Tun_Click(object sender, RoutedEventArgs e)
-    {
-        if (_tunBusy) { if (!_tunStopping) _tunCts?.Cancel(); return; }
-        _tunTask = ToggleTunAsync();
-    }
-    private async Task ToggleTunAsync()
-    {
-        if (_closing || _tunBusy) return;
-        var stop = _tunSession?.IsRunning == true;
-        AppSettings settings = _settings;
-        if (!stop && !TrySaveSettings(out settings)) return;
-        _tunBusy = true; _tunStopping = stop; _tunCts = new(); UpdateControls();
-        try
-        {
-            if (stop)
-            {
-                await StopTunAsync();
-                Log("TUN 已关闭；现有 OpenVPN 连接和本地代理保持运行。");
-            }
-            else
-            {
-                Log(EngineRuntime.IsAdministrator ? "正在独立开启 TUN…" : "正在请求 Windows 管理员授权，独立开启 TUN；OpenVPN 会话保持运行。");
-                var tun = _tunSession;
-                if (tun is null)
-                {
-                tun = new TunSession(); _tunSession = tun;
-                tun.Log += line => Log("[TUN] " + line);
-                tun.Failed += error => Dispatcher.BeginInvoke(async () =>
-                {
-                    if (_tunSession != tun || _closing) return;
-                    Log(error);
-                    if (_tunBusy) { _tunCts?.Cancel(); return; }
-                    await StopTunAsync(dispose: true); UpdateControls();
-                });
-                }
-                await tun.StartAsync(settings, _tunCts.Token);
-                Log(_connectedAt is null ? "TUN 已开启，等待 OpenVPN 节点连接。" : "TUN 已开启，已接入当前 OpenVPN 连接。");
-            }
-        }
-        catch (OperationCanceledException) when (_tunCts.IsCancellationRequested)
-        { await StopTunAsync(dispose: true); Log("已取消开启 TUN。"); }
-        catch (Win32Exception exception) when (exception.NativeErrorCode == 1223)
-        { await StopTunAsync(dispose: true); Log("已取消管理员授权，TUN 保持关闭。"); }
-        catch (Exception exception) { await StopTunAsync(dispose: true); ShowError($"TUN 操作失败：{exception.Message}"); }
-        finally { _tunBusy = false; _tunStopping = false; _tunCts.Dispose(); _tunCts = null; UpdateControls(); }
-    }
-    private async Task StopTunAsync(bool dispose = false)
-    {
-        var tun = _tunSession;
-        if (tun is not null)
-        {
-            if (dispose) { _tunSession = null; await tun.DisposeAsync(); }
-            else await tun.StopAsync();
-        }
-        UpdateTunControls();
-    }
-    private void UpdateTunControls()
-    {
-        if (!_loaded) return;
-        var on = _tunSession?.IsRunning == true;
-        TunButton.IsEnabled = !_closing && !_tunStopping;
-        TunButton.Content = _tunBusy ? _tunStopping ? "正在关闭 TUN…" : "取消开启 TUN" : on ? "关闭 TUN" : "开启 TUN";
-        TunStateText.Text = _tunBusy ? _tunStopping ? "正在清理网卡和临时 DNS 策略…" : "正在开启 TUN，可点击按钮取消。"
-            : on ? _connectedAt is null ? "TUN 已开启，等待 OpenVPN；连接节点后开始转发。" : "TUN 已开启，正在通过当前 OpenVPN 转发。"
-            : "TUN 已关闭。可随时独立开启或关闭。";
-        ModeText.Text = $"{RoutingModes.Label(_settings.RoutingMode)} · " + (on ? "TUN + HTTP + SOCKS5" : "HTTP + SOCKS5");
-        if (on && _settings.RoutingMode == "direct") TunStateText.Text = "TUN 已开启，所有流量直连，无需 OpenVPN 节点。";
-        else if (on && _connectedAt is null && _settings.RoutingMode == "rule") TunStateText.Text = "TUN 已开启，国内流量直连；其他流量等待 OpenVPN。";
-    }
-
-    private void TestAll_Click(object sender, RoutedEventArgs e) => _testTask = TestNodesAsync(_nodes.ToArray());
-    private void TestSelected_Click(object sender, RoutedEventArgs e) => _testTask = TestNodesAsync(NodeGrid.SelectedItems.Cast<VpnNode>().ToArray());
-    private async Task TestNodesAsync(IReadOnlyList<VpnNode> nodes)
-    {
-        if (_testing || _connectionBusy || _closing || nodes.Count == 0 || !TrySaveSettings(out var settings)) return;
-        _testing = true; _testCts = new(); TestProgress.Value = 0; UpdateControls();
-        var success = 0; var failed = 0;
-        foreach (var node in nodes) { node.LatencyMs = null; node.TestStatus = "排队中"; node.Error = ""; }
-        ProgressText.Text = $"测速 0 / {nodes.Count} · 并发 {settings.TestConcurrency} · 保持当前连接";
-        Log($"开始测试 {nodes.Count} 个节点。每个节点独立建立 OpenVPN 连接，HTTPS 请求延时取中位数。");
-        try
-        {
-            await ProbeService.TestManyAsync(nodes, settings,
-                (node, status) => Dispatcher.Invoke(() => node.TestStatus = status),
-                (result, completed, total) => Dispatcher.Invoke(() =>
-                {
-                    var node = nodes.First(n => n.Id == result.NodeId); node.Apply(result);
-                    if (result.Success) success++; else if (!result.Cancelled) failed++;
-                    TestProgress.Value = (double)completed / total * 100;
-                    ProgressText.Text = $"测速 {completed} / {total} · 可用 {success} · 失败 {failed}";
-                    Log(result.Success ? $"[{node.Ip}] 可用，网络延时 {node.LatencyText}" : $"[{node.Ip}] {node.TestStatus}：{result.Error}");
-                }), null, _testCts.Token);
-            ProgressText.Text = _testCts.IsCancellationRequested ? $"测速已取消 · 可用 {success} · 失败 {failed}" : $"测速完成 · 可用 {success} / {nodes.Count} · 失败 {failed}";
-            Log(ProgressText.Text);
-        }
-        catch (Exception exception) { ShowError($"测速异常：{exception.Message}"); }
-        finally
-        {
-            foreach (var node in nodes.Where(n => n.TestStatus is "排队中" or "连接中")) node.TestStatus = "未测试";
-            _testing = false; _testCts.Dispose(); _testCts = null; _store.SaveNodes(_nodes); ApplySort(); UpdateControls();
-        }
-    }
-    private void CancelTests_Click(object sender, RoutedEventArgs e) { _testCts?.Cancel(); ProgressText.Text = "正在取消测速并清理会话…"; }
 
     private bool Filter(object item)
     {
@@ -446,20 +275,20 @@ public partial class MainWindow : Window
     private void UpdateControls()
     {
         if (!_loaded || _closing) return;
-        SettingsPanel.IsEnabled = !_connectionBusy && _session is null && !_testing && !_fetching && !_tunBusy && !_routingBusy && _tunSession?.IsRunning != true;
+        SettingsPanel.IsEnabled = !_connectionBusy && _session?.IsVpnConnected != true && !_tunBusy && !_routingBusy && !_fetching && !_testing;
         SaveButton.IsEnabled = SettingsPanel.IsEnabled;
-        FetchButton.IsEnabled = !_fetching && !_testing && !_connectionBusy && !_routingBusy;
-        FetchButton.Content = _fetching ? "正在获取…" : "获取 / 刷新节点";
-        ConnectButton.IsEnabled = NodeGrid.SelectedItem is VpnNode && !_connectionBusy && !_fetching && !_routingBusy;
-        ConnectButton.Content = _connectionBusy ? "正在连接…" : _session is null ? "连接选中节点" : "切换选中节点";
-        DisconnectButton.IsEnabled = _session is not null || _connectionBusy;
+        FetchButton.IsEnabled = !_fetching && !_testing && !_routingBusy;
+        FetchButton.Content = _fetching ? "正在获取…" : _testing ? "正在验证…" : "立即刷新节点池";
+        ConnectButton.IsEnabled = NodeGrid.SelectedItem is VpnNode && !_connectionBusy && !_tunBusy && !_routingBusy;
+        ConnectButton.Content = _connectionBusy ? "正在连接…" : _session?.IsVpnConnected != true ? "连接选中节点" : "切换选中节点";
+        DisconnectButton.IsEnabled = _session?.IsVpnConnected == true || _connectionBusy;
         TestSelectedButton.IsEnabled = NodeGrid.SelectedItems.Count > 0 && !_testing && !_connectionBusy && !_fetching && !_routingBusy;
         TestAllButton.IsEnabled = _nodes.Count > 0 && !_testing && !_connectionBusy && !_fetching && !_routingBusy;
-        CancelTestsButton.IsEnabled = _testing;
+        CancelTestsButton.IsEnabled = _testing || _fetching;
         UpdateTunControls();
         UpdateRoutingControls();
     }
-    private void UpdateCount() => NodeCountText.Text = _view.Count == _nodes.Count ? $"{_nodes.Count} 个节点" : $"{_view.Count} / {_nodes.Count} 个节点";
+    private void UpdateCount() => NodeCountText.Text = _view.Count == _nodes.Count ? $"{_nodes.Count} 个可用节点" : $"{_view.Count} / {_nodes.Count} 个可用节点";
     private void SetStatus(string text, string background, string color)
     {
         StatusText.Text = text; StatusPill.Background = (Brush)new BrushConverter().ConvertFromString(background)!;
@@ -499,13 +328,13 @@ public partial class MainWindow : Window
         e.Cancel = true;
         if (_closing) return;
         _closing = true; IsEnabled = false; _timer.Stop(); _logTimer.Stop();
-        _connectCts?.Cancel(); _testCts?.Cancel(); _fetchCts?.Cancel(); _tunCts?.Cancel(); _ipInfoCts?.Cancel();
-        _rulesCts.Cancel();
-        foreach (var task in new[] { _connectTask, _testTask, _fetchTask, _tunTask, _ipInfoTask, _routingTask, _rulesLoopTask, _ruleUpdateTask }.Where(t => t is not null))
+        _connectCts?.Cancel(); _tunCts?.Cancel(); _ipInfoCts?.Cancel();
+        _rulesCts.Cancel(); _poolCts.Cancel(); _poolRoundCts?.Cancel();
+        foreach (var task in new[] { _connectTask, _testTask, _fetchTask, _tunTask, _ipInfoTask, _routingTask, _rulesLoopTask, _ruleUpdateTask, _poolLoopTask }.Where(t => t is not null))
             try { await task!; } catch (Exception exception) { Log($"退出清理：{exception.Message}"); }
         await StopTunAsync(dispose: true); await DisconnectSessionAsync(); _store.SaveNodes(_nodes);
         await _log.DisposeAsync();
-        _rulesCts.Dispose();
+        _rulesCts.Dispose(); _poolCts.Dispose();
         _canClose = true; _ = Dispatcher.BeginInvoke(Close);
     }
 
@@ -529,37 +358,10 @@ public partial class MainWindow : Window
             SortBox.SelectedIndex = 0;
             _testTask = TestNodesAsync(_nodes.Where(n => n.SupportsTcp && !n.HostName.StartsWith("public-vpn-", StringComparison.Ordinal)).Take(8).ToArray()); await _testTask;
             var candidates = _nodes.Where(n => n.LatencyMs is not null).OrderBy(n => n.LatencyMs).ToArray();
-            var testTun = _arguments.Contains("--tun-ui", StringComparer.Ordinal);
-            async Task ClickTun()
-            {
-                if (!TunButton.IsEnabled) throw new IOException("TUN 按钮不应被当前 OpenVPN 状态禁用。");
-                TunButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                await _tunTask!;
-            }
-            if (testTun)
-            {
-                await ClickTun();
-                if (_tunSession?.IsRunning != true || _session is not null) throw new IOException("未连接节点时独立开启 TUN 失败。");
-                checks["tunStartedBeforeVpn"] = true;
-                SaveScreenshot(Path.Combine(directory, "tun-waiting-for-vpn.png"));
-                var worker = _tunSession.WorkerProcessId;
-                await ClickTun();
-                if (_tunSession.IsRunning) throw new IOException("未连接节点时关闭 TUN 失败。");
-                checks["tunStoppedBeforeVpn"] = true;
-                await ClickTun();
-                if (_tunSession?.IsRunning != true || _tunSession.WorkerProcessId != worker) throw new IOException("TUN 再次开启未复用已授权进程。");
-                checks["tunWorkerReused"] = true;
-            }
             foreach (var candidate in candidates)
             {
                 NodeGrid.SelectedItem = candidate;
                 ConnectButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                if (testTun && _tunSession?.IsRunning == true)
-                {
-                    if (!_connectionBusy || !TunButton.IsEnabled) throw new IOException("OpenVPN 连接过程中 TUN 按钮不可用。");
-                    await ClickTun();
-                    checks["tunToggledWhileConnecting"] = true;
-                }
                 await _connectTask!;
                 if (_session?.IsRunning == true && _connectedAt is not null) break;
             }
@@ -582,19 +384,6 @@ public partial class MainWindow : Window
                 checks["allModesKeepSameVpnProcess"] = true; checks["vpnProbeWorksInEveryMode"] = true;
                 checks["domesticLocalProxySplitsCorrectly"] = true;
             }
-            if (testTun)
-            {
-                var vpn = _session;
-                var vpnPid = vpn.HostProcessId;
-                await ClickTun();
-                if (_tunSession?.IsRunning != true || _session != vpn || _session.HostProcessId != vpnPid) throw new IOException("开启 TUN 重建了 OpenVPN。");
-                checks["tunOnPreservesVpnProcess"] = true;
-                await ClickTun();
-                if (_tunSession?.IsRunning == true || _session != vpn || _session.HostProcessId != vpnPid) throw new IOException("关闭 TUN 中断了 OpenVPN。");
-                await ProbeService.MeasureAsync(vpn.Port, _settings, CancellationToken.None, _settings.ListenAddress);
-                checks["tunOffPreservesWorkingLocalProxy"] = true;
-                await ClickTun();
-            }
             checks["firstNode"] = _session.Node!.Ip; checks["firstExit"] = ExitIpText.Text; checks["latency"] = LatencyText.Text;
             SaveScreenshot(Path.Combine(directory, "connected.png"));
             var firstId = _session.Node.Id;
@@ -612,16 +401,6 @@ public partial class MainWindow : Window
             SortBox.SelectedIndex = 1;
             checks["latencySorted"] = _view.Cast<VpnNode>().Where(n => n.LatencyMs is not null).Select(n => n.LatencyMs).ToArray();
             SaveScreenshot(Path.Combine(directory, "tested.png"));
-            if (testTun)
-            {
-                var worker = _tunSession?.WorkerProcessId;
-                await DisconnectSessionAsync(); UpdateControls();
-                if (_tunSession?.IsRunning != true || _tunSession.WorkerProcessId != worker) throw new IOException("断开 OpenVPN 意外关闭了 TUN。");
-                checks["disconnectKeepsTunOn"] = true;
-                await ClickTun();
-                if (_tunSession?.IsRunning == true) throw new IOException("OpenVPN 断开后 TUN 无法关闭。");
-                checks["tunStoppedAfterDisconnect"] = true;
-            }
             checks["success"] = true;
         }
         catch (Exception exception) { checks["success"] = false; checks["error"] = exception.ToString(); SaveScreenshot(Path.Combine(directory, "error.png")); }
