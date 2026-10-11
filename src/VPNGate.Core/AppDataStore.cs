@@ -50,6 +50,7 @@ public sealed class AppDataStore
         Write("settings.json", copy);
     }
     public IReadOnlyList<VpnNode> LoadNodes() => Read<List<VpnNode>>("nodes.json") ?? [];
+    // This file is only the usable pool. Pruning nodes must not prune the independent IP metadata cache.
     public void SaveNodes(IEnumerable<VpnNode> nodes) => Write("nodes.json", nodes.ToList());
     public DateTimeOffset? LoadPoolRefresh() => Read<DateTimeOffset?>("node-pool-refresh.json");
     public void SavePoolRefresh(DateTimeOffset refresh) => Write("node-pool-refresh.json", refresh);

@@ -56,6 +56,37 @@ try
             await restarted.LookupAsync(first.Keys, new AppSettings { UpstreamProxy = "offline" }, null, CancellationToken.None);
             Check(traffic.Requests == 1 && traffic.Transports == 1, "persisted cache survives a new client and works without a usable proxy");
             Check(store.LoadIpApiNextRequest() > DateTimeOffset.UtcNow, "API request cooldown is persisted");
+            var knownIps = store.LoadIpNetworkCache();
+            var removed = new VpnNode { Id = "removed-node", Ip = old.Ip, HostName = "removed-node",
+                TestStatus = "可用", TestedAt = DateTimeOffset.UtcNow, LatencyMs = 10, NetworkInfo = old };
+            store.SaveNodes([removed]);
+            var failingPool = new NodePool(store.LoadNodes(), probe: (node, _, _) => Task.FromResult(
+                new ProbeResult(node.Id, false, null, null, "unavailable", DateTimeOffset.UtcNow)));
+            await failingPool.RefreshAsync(new(), null, CancellationToken.None, fetchNew: false);
+            store.SaveNodes(failingPool.Nodes);
+            Check(failingPool.Nodes.Count == 0 && store.LoadNodes().Count == 0,
+                "an unavailable node is removed from the persisted usable pool");
+            var retained = new AppDataStore(root).LoadIpNetworkCache();
+            Check(retained.Count == knownIps.Count && knownIps.All(entry => retained.TryGetValue(entry.Key, out var info) && info == entry.Value),
+                "pruning the last node preserves every cached IP record on disk");
+            await restarted.LookupAsync([], new AppSettings { UpstreamProxy = "offline" }, null, CancellationToken.None);
+            var returningPool = new NodePool(new AppDataStore(root).LoadNodes(),
+                fetch: (_, _) => Task.FromResult<IReadOnlyList<VpnNode>>([
+                    new() { Id = "returning-node", Ip = old.Ip, HostName = "returning-node" }]),
+                probe: (node, _, _) => Task.FromResult(new ProbeResult(node.Id, true, 12, 30, "", DateTimeOffset.UtcNow)));
+            await returningPool.RefreshAsync(new(), null, CancellationToken.None);
+            var returningStore = new AppDataStore(root);
+            returningStore.SaveNodes(returningPool.Nodes);
+            var returningClient = new IpNetworkInfoClient(returningStore, factory);
+            returningClient.ApplyCached(returningPool.Nodes);
+            Check(returningPool.Nodes.Single().Id != removed.Id && returningPool.Nodes.Single().NetworkInfo == old,
+                "a returning IP reuses its metadata even under a different node ID after restart");
+            await returningClient.LookupAsync(returningPool.Nodes.Select(node => node.Ip),
+                new AppSettings { UpstreamProxy = "offline" }, null, CancellationToken.None);
+            Check(traffic.Requests == 1 && traffic.Transports == 1,
+                "an empty pool and a returning node cause no additional IP API requests");
+            Check(returningStore.LoadIpNetworkCache()[old.Ip].CheckedAt == old.CheckedAt,
+                "node removal and return do not reset the original seven-day expiration");
             var boundary = DateTimeOffset.UtcNow;
             var atExpiry = new IpNetworkInfo("198.51.100.3", false, false, "ISP", "", "", boundary.AddDays(-7));
             Check(!atExpiry.NeedsLookup(boundary.AddTicks(-1)) && atExpiry.NeedsLookup(boundary),
